@@ -9,6 +9,7 @@ The first implementation deliberately avoids arbitrary code execution. Instead, 
 - Upload CSV/XLSX/XLS files up to 10MB.
 - Profile rows, columns, dtypes, missing values, numeric stats, and top categorical values.
 - Generate up to 3 recommended Plotly charts.
+- Answer focused grouped-metric questions such as "doanh thu theo vùng" with a grouped summary and matching bar chart.
 - Generate a natural-language insight summary.
 - Ask simple dataset questions through read-only DuckDB SQL generation.
 - Export Markdown report.
@@ -138,6 +139,7 @@ python scripts/smoke_test.py
 
 - Add LLM provider abstraction for insight synthesis.
 - Add benchmark datasets and 20 evaluation questions.
+- Expand question-aware analysis intents beyond grouped metrics.
 - Add chart success-rate and latency metrics.
 - Add PII detection and masking option.
 - Add async job queue for larger files.
@@ -153,4 +155,3 @@ This project is designed to demonstrate:
 - backend API design with FastAPI;
 - chart/report generation;
 - evaluation-ready AI engineering workflow.
-

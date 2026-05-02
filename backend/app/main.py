@@ -14,7 +14,7 @@ from backend.app.schemas import (
     HealthResponse,
     UploadResponse,
 )
-from backend.app.services.charts import generate_recommended_charts
+from backend.app.services.charts import generate_question_charts, generate_recommended_charts
 from backend.app.services.guardrails import describe_guardrails
 from backend.app.services.insights import generate_insights
 from backend.app.services.profiler import build_profile
@@ -78,8 +78,8 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
 
     profile = session.profile or build_profile(session.dataframe)
     session.profile = profile
-    charts = generate_recommended_charts(session.dataframe)
     answer = generate_insights(session.dataframe, profile, req.question)
+    charts = generate_question_charts(session.dataframe, req.question) or generate_recommended_charts(session.dataframe)
     report_id, _ = write_markdown_report(answer, profile, charts)
     session.report_id = report_id
     session.history.append({"role": "assistant", "content": answer})
@@ -123,4 +123,3 @@ def download_report(report_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report not found.")
     return FileResponse(path, media_type="text/markdown", filename=f"report-{report_id}.md")
-

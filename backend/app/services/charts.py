@@ -7,6 +7,30 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 
+from backend.app.services.analysis_intent import (
+    build_grouped_metric_frame,
+    infer_grouped_metric_intent,
+)
+
+
+def generate_question_charts(df: pd.DataFrame, question: str | None) -> list[dict[str, Any]]:
+    intent = infer_grouped_metric_intent(question, df)
+    if not intent:
+        return []
+
+    grouped = build_grouped_metric_frame(df, intent).head(12)
+    title = f"{intent.metric_label.capitalize()} theo {intent.dimension_label}"
+    fig = px.bar(
+        grouped,
+        x=intent.dimension,
+        y=intent.metric,
+        title=title,
+        text=intent.metric,
+    )
+    fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+    fig.update_layout(xaxis_title=intent.dimension_label.capitalize(), yaxis_title=intent.metric_label.capitalize())
+    return [_chart("bar", title, fig, x=intent.dimension, y=intent.metric)]
+
 
 def generate_recommended_charts(df: pd.DataFrame, max_charts: int = 3) -> list[dict[str, Any]]:
     charts: list[dict[str, Any]] = []

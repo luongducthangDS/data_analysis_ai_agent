@@ -4,8 +4,17 @@ from typing import Any
 
 import pandas as pd
 
+from backend.app.services.analysis_intent import (
+    build_grouped_metric_frame,
+    infer_grouped_metric_intent,
+)
+
 
 def generate_insights(df: pd.DataFrame, profile: dict[str, Any], question: str | None = None) -> str:
+    focused = _generate_focused_grouped_metric_answer(df, question)
+    if focused:
+        return focused
+
     lines: list[str] = []
     if question:
         lines.append(f"Phân tích theo câu hỏi: {question}")
@@ -46,6 +55,41 @@ def generate_insights(df: pd.DataFrame, profile: dict[str, Any], question: str |
     return "\n".join(lines)
 
 
+def _generate_focused_grouped_metric_answer(df: pd.DataFrame, question: str | None) -> str | None:
+    intent = infer_grouped_metric_intent(question, df)
+    if not intent:
+        return None
+
+    grouped = build_grouped_metric_frame(df, intent)
+    if grouped.empty:
+        return f"Không có dữ liệu phù hợp để tính {intent.metric_label} theo {intent.dimension_label}."
+
+    total = float(grouped[intent.metric].sum())
+    top = grouped.iloc[0]
+    top_value = float(top[intent.metric])
+    top_share = (top_value / total * 100) if total else 0
+
+    lines = [
+        f"{intent.metric_label.capitalize()} theo {intent.dimension_label}: tổng cộng {total:,.0f}.",
+        (
+            f"{intent.dimension_label.capitalize()} dẫn đầu là {top[intent.dimension]} "
+            f"với {top_value:,.0f}, chiếm {top_share:.1f}% tổng {intent.metric_label}."
+        ),
+        "",
+        f"Xếp hạng {intent.metric_label} theo {intent.dimension_label}:",
+    ]
+
+    for index, row in enumerate(grouped.head(10).to_dict(orient="records"), start=1):
+        dimension_value = row[intent.dimension]
+        metric_value = float(row[intent.metric])
+        share = (metric_value / total * 100) if total else 0
+        lines.append(f"{index}. {dimension_value}: {metric_value:,.0f} ({share:.1f}%)")
+
+    lines.append("")
+    lines.append("Biểu đồ cột đi kèm thể hiện trực quan mức đóng góp của từng nhóm.")
+    return "\n".join(lines)
+
+
 def _largest_numeric_range(numeric_summary: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
     candidates = []
     for col, summary in numeric_summary.items():
@@ -68,4 +112,3 @@ def _recommended_chart_count(df: pd.DataFrame) -> int:
     if numeric >= 1:
         return 1
     return 0
-

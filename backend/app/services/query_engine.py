@@ -6,6 +6,8 @@ from typing import Any
 import duckdb
 import pandas as pd
 
+from backend.app.services.analysis_intent import infer_grouped_metric_intent
+
 
 FORBIDDEN_SQL = re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|create|replace|copy|attach|detach)\b|;.*\w",
@@ -32,6 +34,15 @@ def simple_question_to_sql(question: str, df: pd.DataFrame) -> str:
     normalized = question.lower()
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     categorical_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+
+    grouped_intent = infer_grouped_metric_intent(question, df)
+    if grouped_intent:
+        return (
+            f'SELECT "{grouped_intent.dimension}", '
+            f'SUM("{grouped_intent.metric}") AS total_{_safe_alias(grouped_intent.metric)} '
+            f'FROM dataset GROUP BY "{grouped_intent.dimension}" '
+            f'ORDER BY total_{_safe_alias(grouped_intent.metric)} DESC'
+        )
 
     if "bao nhiêu dòng" in normalized or "how many rows" in normalized or "số dòng" in normalized:
         return "SELECT COUNT(*) AS row_count FROM dataset"
@@ -65,4 +76,3 @@ def _safe_alias(column: str) -> str:
 def _frame_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     records = df.where(pd.notna(df), None).to_dict(orient="records")
     return [{str(key): value for key, value in row.items()} for row in records]
-
