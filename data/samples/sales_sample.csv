@@ -1,0 +1,12 @@
+category,region,sales,profit,quantity
+Electronics,North,1200,240,3
+Electronics,South,950,180,2
+Furniture,North,700,120,4
+Furniture,West,1100,260,5
+Office Supplies,East,400,80,10
+Office Supplies,South,500,90,12
+Electronics,West,1300,310,4
+Furniture,East,850,190,3
+Office Supplies,North,450,70,9
+Electronics,East,1500,360,5
+
