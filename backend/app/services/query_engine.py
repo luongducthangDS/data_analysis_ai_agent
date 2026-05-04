@@ -6,7 +6,7 @@ from typing import Any
 import duckdb
 import pandas as pd
 
-from backend.app.services.analysis_intent import infer_grouped_metric_intent
+from backend.app.services.analysis_intent import infer_grouped_metric_intent, normalize_text
 
 
 FORBIDDEN_SQL = re.compile(
@@ -31,7 +31,7 @@ def run_readonly_query(df: pd.DataFrame, sql: str, limit: int = 100) -> list[dic
 
 
 def simple_question_to_sql(question: str, df: pd.DataFrame) -> str:
-    normalized = question.lower()
+    normalized = normalize_text(question)
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     categorical_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
 
@@ -44,18 +44,18 @@ def simple_question_to_sql(question: str, df: pd.DataFrame) -> str:
             f'ORDER BY total_{_safe_alias(grouped_intent.metric)} DESC'
         )
 
-    if "bao nhiêu dòng" in normalized or "how many rows" in normalized or "số dòng" in normalized:
+    if any(token in normalized for token in ("bao nhieu dong", "how many rows", "so dong", "row count")):
         return "SELECT COUNT(*) AS row_count FROM dataset"
 
-    if numeric_cols and ("trung bình" in normalized or "average" in normalized or "mean" in normalized):
+    if numeric_cols and any(token in normalized for token in ("trung binh", "average", "mean", "avg")):
         col = _find_column(normalized, numeric_cols) or numeric_cols[0]
         return f'SELECT AVG("{col}") AS avg_{_safe_alias(col)} FROM dataset'
 
-    if numeric_cols and ("tổng" in normalized or "sum" in normalized):
+    if numeric_cols and any(token in normalized for token in ("tong", "sum", "total")):
         col = _find_column(normalized, numeric_cols) or numeric_cols[0]
         return f'SELECT SUM("{col}") AS sum_{_safe_alias(col)} FROM dataset'
 
-    if categorical_cols and ("top" in normalized or "phổ biến" in normalized or "nhiều nhất" in normalized):
+    if categorical_cols and any(token in normalized for token in ("top", "pho bien", "nhieu nhat", "most common")):
         cat = _find_column(normalized, categorical_cols) or categorical_cols[0]
         return f'SELECT "{cat}", COUNT(*) AS count FROM dataset GROUP BY "{cat}" ORDER BY count DESC LIMIT 10'
 
@@ -64,7 +64,7 @@ def simple_question_to_sql(question: str, df: pd.DataFrame) -> str:
 
 def _find_column(question: str, columns: list[str]) -> str | None:
     for col in columns:
-        if col.lower() in question:
+        if normalize_text(col) in question:
             return col
     return None
 

@@ -10,6 +10,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tmp/
 .coverage
 htmlcov/
 
@@ -32,4 +33,3 @@ data/reports/
 .vscode/
 Thumbs.db
 desktop.ini
-

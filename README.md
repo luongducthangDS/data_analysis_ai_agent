@@ -6,7 +6,8 @@ The first implementation deliberately avoids arbitrary code execution. Instead, 
 
 ## MVP Scope
 
-- Upload CSV/XLSX/XLS files up to 10MB.
+- Upload one or more CSV/XLSX/XLS files up to 10MB each.
+- **[NEW] Support for Excel files with multiple sheets and multi-file aggregation** - automatically detect relationships between sheets and across uploaded files.
 - Profile rows, columns, dtypes, missing values, numeric stats, and top categorical values.
 - Generate up to 3 recommended Plotly charts.
 - Answer focused grouped-metric questions such as "doanh thu theo vùng" with a grouped summary and matching bar chart.
@@ -65,7 +66,10 @@ POST /api/upload
 Content-Type: multipart/form-data
 ```
 
-Returns `session_id` and dataset profile.
+This endpoint now supports uploading one or more files in the same request.
+It can aggregate across multiple Excel files and all sheets within each uploaded file.
+
+Returns `session_id`, dataset profile, filenames, sheet identifiers, and sheet structure context.
 
 ### Analyze
 
@@ -94,6 +98,68 @@ Content-Type: application/json
 ```
 
 The MVP maps common questions to safe read-only DuckDB queries.
+
+## Multi-Sheet Support
+
+For Excel files with multiple sheets, the system automatically:
+
+1. **Detects relationships** between sheets (based on common columns)
+2. **Analyzes sheet structure** (identifies join keys, parent-child relationships)
+3. **Merges related data** intelligently for comprehensive analysis
+
+### New API Endpoints
+
+#### Get Sheets Information
+```http
+GET /api/sheets/{session_id}
+```
+
+Response includes:
+- List of all sheets with metadata (rows, columns, column names)
+- Detected relationships and join keys
+- Similarity scores between sheets
+
+Example:
+```json
+{
+  "sheets": [
+    {
+      "name": "Products",
+      "rows": 100,
+      "columns": 5,
+      "column_names": ["product_id", "name", "category", ...]
+    },
+    {
+      "name": "Sales",
+      "rows": 500,
+      "columns": 4,
+      "column_names": ["product_id", "sales", "revenue", ...]
+    }
+  ],
+  "relationships": [
+    {
+      "sheet1": "Products",
+      "sheet2": "Sales",
+      "join_key": "product_id",
+      "relationship_type": "parent_child"
+    }
+  ]
+}
+```
+
+#### Merge Multiple Sheets
+```http
+POST /api/merge-sheets
+Content-Type: application/json
+
+{
+  "session_id": "...",
+  "sheet_names": ["Products", "Sales"],
+  "join_key": "product_id"
+}
+```
+
+This creates a merged dataset that can be used for subsequent analysis and reporting.
 
 ## Run Backend
 

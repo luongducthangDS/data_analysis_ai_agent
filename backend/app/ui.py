@@ -33,7 +33,7 @@ def render_home() -> str:
   <main class="grid">
     <section>
       <h2>Dataset</h2>
-      <input id="file" type="file" accept=".csv,.xlsx,.xls" />
+      <input id="file" type="file" accept=".csv,.xlsx,.xls" multiple />
       <p><button id="upload">Upload & Profile</button></p>
       <div id="session" class="meta"></div>
       <h3>Question</h3>
@@ -56,10 +56,10 @@ def render_home() -> str:
     const setAnswer = (text) => $('answer').textContent = text;
 
     $('upload').onclick = async () => {
-      const file = $('file').files[0];
-      if (!file) return alert('Chọn file CSV/XLSX trước.');
+      const files = Array.from($('file').files);
+      if (!files.length) return alert('Chọn file CSV/XLSX trước.');
       const form = new FormData();
-      form.append('file', file);
+      files.forEach((file) => form.append('files', file));
       $('upload').disabled = true;
       setAnswer('Đang upload và profiling...');
       const res = await fetch('/api/upload', { method: 'POST', body: form });
@@ -104,6 +104,9 @@ def render_home() -> str:
 
     function renderCharts(charts) {
       $('charts').innerHTML = '';
+      if (!window.Plotly) {
+        return;
+      }
       charts.forEach((chart) => {
         const el = document.createElement('div');
         el.className = 'chart';
@@ -114,4 +117,3 @@ def render_home() -> str:
   </script>
 </body>
 </html>"""
-

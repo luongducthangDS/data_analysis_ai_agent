@@ -26,7 +26,11 @@ class ChartSpec(BaseModel):
 class UploadResponse(BaseModel):
     session_id: str
     filename: str
+    filenames: list[str] | None = Field(default=None, description="Original uploaded filenames")
     profile: DatasetProfile
+    sheet_names: list[str] | None = Field(default=None, description="List of sheet identifiers from uploaded files")
+    file_sheet_map: dict[str, list[str]] | None = Field(default=None, description="Mapping of filename to sheet identifiers")
+    sheets_context: str | None = Field(default=None, description="Description of sheet structure")
 
 
 class AnalyzeRequest(BaseModel):
@@ -62,3 +66,33 @@ class HealthResponse(BaseModel):
     status: str
     sessions: int
 
+
+class SheetData(BaseModel):
+    file_name: str | None = None
+    name: str
+    rows: int
+    columns: int
+    column_names: list[str]
+    preview: list[dict[str, Any]] = Field(default_factory=list, description="First 5 rows")
+
+
+class GetSheetsResponse(BaseModel):
+    session_id: str
+    files: list[str] | None = Field(default=None, description="Uploaded filenames")
+    sheets: list[SheetData]
+    relationships: list[dict[str, Any]] = Field(
+        default_factory=list, description="Detected relationships between sheets"
+    )
+
+
+class MergeSheetsRequest(BaseModel):
+    session_id: str
+    sheet_names: list[str] = Field(description="Sheet names to merge")
+    join_key: str | None = Field(default=None, description="Column to join on")
+
+
+class MergeSheetsResponse(BaseModel):
+    session_id: str
+    merged_rows: int
+    merged_columns: int
+    merged_sheet_name: str
