@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,8 +32,9 @@ from backend.app.services.profiler import build_profile
 from backend.app.services.query_engine import run_readonly_query, simple_question_to_sql
 from backend.app.services.reports import write_markdown_report
 from backend.app.services.storage import REPORT_DIR, session_store
-from backend.app.ui import render_home
 
+# React build output (frontend/vite.config.ts → outDir: "../dist")
+DIST_DIR = Path(__file__).resolve().parents[2] / "dist"
 
 app = FastAPI(
     title="Data Analysis AI Agent",
@@ -51,7 +53,15 @@ app.add_middleware(
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> HTMLResponse:
-    return HTMLResponse(render_home())
+    index = DIST_DIR / "index.html"
+    if index.exists():
+        return HTMLResponse(index.read_text())
+    return HTMLResponse("<h2>Frontend not built. Run: cd frontend && npm run build</h2>", status_code=503)
+
+
+# Serve React static assets (js/css/images) — must be after all API routes
+if DIST_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets")
 
 
 @app.get("/api/health", response_model=HealthResponse)
