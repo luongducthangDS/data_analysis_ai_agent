@@ -124,6 +124,11 @@ def render_home() -> str:
     .tab-content { display: none; padding: 18px; }
     .tab-content.active { display: block; }
 
+    /* ── Suggestion chips ── */
+    .suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .suggestion-chip { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 5px 12px; font-size: 12px; color: var(--text2); cursor: pointer; transition: all 0.12s; white-space: nowrap; }
+    .suggestion-chip:hover { background: var(--accent-light); border-color: var(--accent); color: var(--accent-text); }
+
     /* ── Data table ── */
     .table-wrap { overflow-x: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
     .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -253,9 +258,13 @@ def render_home() -> str:
         <span class="tag tag-indigo" style="margin-left:auto">Groq AI</span>
       </div>
       <div class="panel-body">
+        <div id="suggestions-wrap" style="display:none; margin-bottom:12px;">
+          <div style="font-size:11px; color:var(--text3); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">Gợi ý câu hỏi</div>
+          <div class="suggestions" id="suggestion-chips"></div>
+        </div>
         <div class="question-row">
           <div class="question-wrap">
-            <textarea class="question-input" id="analyze-question" placeholder="Ví dụ: top 5 category theo doanh thu, phân bố điểm theo lớp, trend theo tháng..."></textarea>
+            <textarea class="question-input" id="analyze-question" placeholder="Ví dụ: tổng amount theo category, top 10 employee chi tiêu nhiều nhất, trend theo tháng..."></textarea>
           </div>
           <div class="btn-group">
             <button class="btn btn-primary" id="btn-analyze" disabled onclick="doAnalyze()">
@@ -354,6 +363,7 @@ def render_home() -> str:
       document.getElementById('sidebar-file-info').style.display = 'block';
       document.getElementById('sidebar-no-file').style.display = 'none';
       if (data.preview_columns && data.preview_rows) renderPreviewTable(data.preview_columns, data.preview_rows, p.rows);
+      if (data.suggested_queries && data.suggested_queries.length) renderSuggestions(data.suggested_queries);
       setStatus('ready');
       switchTab('preview');
     } catch(err) { setStatus('error'); alert('Lỗi kết nối: ' + err.message); }
@@ -436,6 +446,25 @@ def render_home() -> str:
       const layout = Object.assign({}, chart.plotly_json.layout, { margin: {l:48,r:24,t:40,b:60}, paper_bgcolor:'transparent', plot_bgcolor:'transparent', font: {family:'Inter,sans-serif',size:12,color:'#6b7280'} });
       Plotly.newPlot(wrap, chart.plotly_json.data, layout, { responsive: true, displayModeBar: false });
     });
+  }
+
+  // ── Suggestions ──
+  function renderSuggestions(queries) {
+    const wrap = document.getElementById('suggestions-wrap');
+    const chips = document.getElementById('suggestion-chips');
+    chips.innerHTML = '';
+    queries.forEach(q => {
+      const chip = document.createElement('button');
+      chip.className = 'suggestion-chip';
+      chip.textContent = q;
+      chip.onclick = () => {
+        document.getElementById('analyze-question').value = q;
+        switchTab('analyze');
+        document.getElementById('analyze-question').focus();
+      };
+      chips.appendChild(chip);
+    });
+    wrap.style.display = 'block';
   }
 
   // ── Preview table ──
