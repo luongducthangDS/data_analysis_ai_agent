@@ -33,6 +33,7 @@ class UploadResponse(BaseModel):
     sheets_context: str | None = Field(default=None, description="Description of sheet structure")
     preview_columns: list[str] = Field(default_factory=list, description="Column names for table preview")
     preview_rows: list[dict[str, Any]] = Field(default_factory=list, description="First 10 rows for table preview")
+    suggested_queries: list[str] = Field(default_factory=list, description="Auto-generated example queries")
 
 
 class AnalyzeRequest(BaseModel):

@@ -41,7 +41,7 @@ def run_planned_analysis(df: pd.DataFrame, question: str | None, profile: dict[s
 
     plan = _build_plan_with_llm(df, question, profile)
     result = execute_plan(df, plan)
-    answer = _synthesize_answer(question, result, plan)
+    answer = _synthesize_answer(question, result, plan, source_df=df)
     charts = _build_charts_from_result(result, plan)
     return PlannerResult(
         answer=answer,
@@ -117,12 +117,54 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
             "limit": intent.top_n or 10,
         }
 
+    # Detect "theo [categorical_value]" — e.g. "doanh thu theo travel" where "travel" is a value in Category
+    value_filter = _detect_value_filter(normalized, df)
+    if value_filter and numeric_cols:
+        col, val = value_filter
+        metric = _pick_metric(df, ("revenue", "doanh thu", "sales", "amount")) or numeric_cols[0]
+        # Pick best groupby: low-cardinality categorical col (not the filter col, not ID cols)
+        cat_cols = [
+            c for c in df.select_dtypes(include=["object", "category"]).columns
+            if c != col and 1 < df[c].nunique() <= 30 and not _normalize(c).endswith("id")
+        ]
+        if cat_cols:
+            group_col = min(cat_cols, key=lambda c: df[c].nunique())
+            return {
+                "action": "aggregate",
+                "filters": [{"column": col, "operator": "eq", "value": val}],
+                "group_by": [group_col],
+                "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
+                "sort": [{"column": metric, "direction": "desc"}],
+                "limit": 20,
+            }
+        else:
+            # No good dimension → just return total
+            return {
+                "action": "compare_metrics",
+                "filters": [{"column": col, "operator": "eq", "value": val}],
+                "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric} ({val})"}],
+            }
+
     if numeric_cols:
         return {
             "action": "compare_metrics",
             "metrics": [{"column": col, "aggregation": "sum", "label": col} for col in numeric_cols[:4]],
         }
     return {"action": "profile"}
+
+
+def _detect_value_filter(normalized_question: str, df: pd.DataFrame) -> tuple[str, str] | None:
+    """Check if any word/phrase in the question matches a categorical column VALUE."""
+    match = re.search(r"\btheo\s+([\w\s]+?)(?:\s*$|\s+va\s|\s+hoac\s)", normalized_question)
+    phrase = match.group(1).strip() if match else None
+    if not phrase:
+        return None
+    cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    for col in cat_cols:
+        values_lower = {str(v).lower(): str(v) for v in df[col].dropna().unique()}
+        if phrase in values_lower:
+            return col, values_lower[phrase]
+    return None
 
 
 def _build_plan_with_llm(df: pd.DataFrame, question: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -144,50 +186,63 @@ def _build_plan_with_llm(df: pd.DataFrame, question: str, profile: dict[str, Any
 def _build_planner_prompt(df: pd.DataFrame, question: str, profile: dict[str, Any]) -> str:
     schema_lines = []
     for col, dtype in profile["column_types"].items():
-        examples = df[col].dropna().astype(str).head(3).tolist()
-        schema_lines.append(f"- {col}: {dtype}; examples={examples}")
+        examples = df[col].dropna().astype(str).head(5).tolist()
+        schema_lines.append(f"- {col} ({dtype}): {examples}")
 
-    return f"""
-Bạn là data analysis planner. Nhiệm vụ của bạn là chuyển câu hỏi tự nhiên thành JSON plan để backend thực thi bằng Pandas.
+    # Detect currency columns for multi-currency warning in prompt
+    currency_cols = [c for c in df.columns if _normalize(c) in ("currency", "tien_te", "don_vi_tien")]
+    currency_note = ""
+    if currency_cols:
+        currencies = df[currency_cols[0]].dropna().unique().tolist()
+        if len(currencies) > 1:
+            currency_note = f"\nLƯU Ý: Cột '{currency_cols[0]}' có {len(currencies)} loại tiền tệ {currencies}. Nếu câu hỏi hỏi về 1 loại cụ thể, thêm filter currency vào plan.\n"
 
-QUY TẮC BẮT BUỘC:
-- Chỉ trả về một JSON object hợp lệ, không markdown, không giải thích.
-- Không tự tính số liệu.
-- Chỉ dùng cột có trong schema hoặc derived_columns do bạn tạo.
-- Không sinh Python code.
-- Nếu cần tính toán, dùng action/tool được cho phép.
-- Nếu hỏi doanh thu gốc: quantity * unit_price.
-- Nếu hỏi doanh thu thực tế/sau discount: ưu tiên cột revenue nếu có; nếu không có thì tạo net_revenue_from_discount_pct từ quantity, unit_price, discount_pct.
-- Nếu hỏi Q1/Q2/năm/tháng, dùng cột datetime phù hợp và derived column quarter/month/year.
+    return f"""Bạn là senior data analyst / financial analyst AI. Nhiệm vụ: chuyển câu hỏi tự nhiên (tiếng Việt hoặc Anh) thành JSON plan chính xác để backend thực thi bằng Pandas.
 
+QUY TẮC TUYỆT ĐỐI:
+1. Chỉ trả về JSON object thuần túy — không markdown, không giải thích, không code block.
+2. Chỉ dùng tên cột CHÍNH XÁC từ SCHEMA bên dưới.
+3. aggregation hợp lệ: sum | mean | median | min | max | count | nunique
+4. operator hợp lệ: eq | ne | gt | gte | lt | lte | between | in | contains
+5. Nếu câu hỏi hỏi "bao nhiêu", "số lượng", "count" → aggregation = "count"
+6. Nếu câu hỏi hỏi "trung bình", "average" → aggregation = "mean"
+7. Nếu câu hỏi hỏi "tỷ lệ %", "phần trăm" → vẫn dùng "sum" hoặc "count" để group, backend tính % từ đó
+8. Nếu có cột ngày giờ và câu hỏi hỏi theo tháng/quý/năm → dùng time_series với grain phù hợp
+9. Từ "chưa thanh toán" / "pending" → filter Status != "Paid" hoặc Status = "Submitted"/"Approved"
+10. Từ "lớn nhất", "top N", "cao nhất" → sort desc, limit = N (mặc định 10)
+11. Từ "nhỏ nhất", "thấp nhất", "bottom N" → sort asc, limit = N
+{currency_note}
 SCHEMA DATASET:
 {chr(10).join(schema_lines)}
 
-JSON PLAN SCHEMA:
-{{
-  "action": "aggregate | compare_metrics | time_series | profile",
-  "derived_columns": [
-    {{"name": "quarter", "operation": "quarter", "source": "order_date"}},
-    {{"name": "gross_revenue", "operation": "multiply", "columns": ["quantity", "unit_price"]}},
-    {{"name": "net_revenue_after_discount", "operation": "net_revenue_from_discount_pct", "quantity": "quantity", "unit_price": "unit_price", "discount_pct": "discount_pct"}}
-  ],
-  "filters": [
-    {{"column": "order_date", "operator": "between", "value": ["2024-01-01", "2024-12-31"]}},
-    {{"column": "customer_region", "operator": "eq", "value": "Hà Nội"}}
-  ],
-  "group_by": ["product_name"],
-  "time_column": "order_date",
-  "grain": "month | quarter | year | date",
-  "metrics": [
-    {{"column": "quantity", "aggregation": "sum", "label": "Số lượng"}}
-  ],
-  "sort": [{{"column": "quantity", "direction": "desc"}}],
-  "limit": 10
-}}
+VÍ DỤ MINH HỌA (kế toán / kiểm toán / DA):
 
-CÂU HỎI:
-{question}
-""".strip()
+Q: "tổng amount theo category"
+{{"action":"aggregate","group_by":["Category"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount"}}],"sort":[{{"column":"Amount","direction":"desc"}}],"limit":20}}
+
+Q: "top 5 employee chi tiêu nhiều nhất"
+{{"action":"aggregate","group_by":["EmployeeID"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng chi tiêu"}}],"sort":[{{"column":"Amount","direction":"desc"}}],"limit":5}}
+
+Q: "số lượng claim theo trạng thái"
+{{"action":"aggregate","group_by":["Status"],"metrics":[{{"column":"ClaimID","aggregation":"count","label":"Số claim"}}],"sort":[{{"column":"Số claim","direction":"desc"}}],"limit":10}}
+
+Q: "claim nào chưa thanh toán trên 500"
+{{"action":"aggregate","filters":[{{"column":"Status","operator":"ne","value":"Paid"}},{{"column":"Amount","operator":"gt","value":500}}],"group_by":["Status"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount chưa TT"}}],"sort":[{{"column":"Amount","direction":"desc"}}],"limit":20}}
+
+Q: "trend expense theo tháng năm 2024"
+{{"action":"time_series","filters":[{{"column":"SubmitDate","operator":"between","value":["2024-01-01","2024-12-31"]}}],"time_column":"SubmitDate","grain":"month","metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount"}}],"sort":[{{"column":"month","direction":"asc"}}],"limit":12}}
+
+Q: "amount trung bình theo manager"
+{{"action":"aggregate","group_by":["ApprovedBy"],"metrics":[{{"column":"Amount","aggregation":"mean","label":"Amount trung bình"}}],"sort":[{{"column":"Amount trung bình","direction":"desc"}}],"limit":10}}
+
+Q: "so sánh approved vs rejected"
+{{"action":"aggregate","filters":[{{"column":"Status","operator":"in","value":["Approved","Rejected"]}}],"group_by":["Status"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount"}},{{"column":"ClaimID","aggregation":"count","label":"Số claim"}}],"sort":[{{"column":"Tổng Amount","direction":"desc"}}],"limit":5}}
+
+Q: "expense theo category và status"
+{{"action":"aggregate","group_by":["Category","Status"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount"}}],"sort":[{{"column":"Tổng Amount","direction":"desc"}}],"limit":30}}
+
+CÂU HỎI CẦN PHÂN TÍCH:
+{question}""".strip()
 
 
 def _repair_plan_for_question(plan: dict[str, Any], question: str) -> dict[str, Any]:
@@ -453,15 +508,32 @@ def _build_charts_from_result(result: pd.DataFrame, plan: dict[str, Any]) -> lis
     return []
 
 
-def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any]) -> str:
-    return _deterministic_answer(question, result, plan)
+def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
+    return _deterministic_answer(question, result, plan, source_df=source_df)
 
 
-def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, Any]) -> str:
-    lines = ["# Executive Data Brief", "", f"## Kết quả phân tích", f"Câu hỏi: {question}", ""]
+def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
+    # Build filter context string for display
+    filters = plan.get("filters", []) or []
+    filter_desc = ""
+    if filters:
+        parts = []
+        for f in filters:
+            parts.append(f"{f.get('column')} = {f.get('value')}")
+        filter_desc = f" (lọc: {', '.join(parts)})"
+
+    lines = ["# Executive Data Brief", "", f"## Kết quả phân tích{filter_desc}", f"Câu hỏi: {question}", ""]
+
     if result.empty:
         lines.append("Không có dữ liệu phù hợp với điều kiện phân tích.")
         return "\n".join(lines)
+
+    # Multi-currency warning
+    currency_warning = _build_currency_warning(source_df, plan)
+    if currency_warning:
+        lines.append(f"⚠️  {currency_warning}")
+        lines.append("")
+
     if plan.get("action") == "compare_metrics" and set(result.columns) >= {"metric", "value"}:
         lines.append("### So sánh chỉ số")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
@@ -480,13 +552,35 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
     if len(result.columns) >= 2 and numeric_cols:
         dim = result.columns[0]
         metric = numeric_cols[0]
-        lines.append("### Xếp hạng / kết quả")
+        total = sum(float(r[metric]) for r in result.to_dict(orient="records") if r[metric] is not None)
+        lines.append(f"### Xếp hạng / kết quả")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
-            lines.append(f"{index}. {row[dim]}: {_format_cell(row[metric])}")
+            val = row[metric]
+            pct = f" ({float(val)/total*100:.1f}%)" if total and val is not None else ""
+            lines.append(f"{index}. {row[dim]}: {_format_cell(val)}{pct}")
+        if len(result) > 1:
+            lines.append(f"\nTổng: {_format_cell(total)}")
         return "\n".join(lines)
 
     lines.append(_frame_to_markdown(result))
     return "\n".join(lines)
+
+
+def _build_currency_warning(df: pd.DataFrame | None, plan: dict[str, Any]) -> str | None:
+    if df is None:
+        return None
+    currency_cols = [c for c in df.columns if _normalize(c) in ("currency", "tien_te", "don_vi_tien")]
+    if not currency_cols:
+        return None
+    # Apply filters to get relevant subset
+    try:
+        work = _apply_filters(df, plan.get("filters", []) or [])
+    except Exception:
+        work = df
+    currencies = work[currency_cols[0]].dropna().unique()
+    if len(currencies) > 1:
+        return f"Dữ liệu có {len(currencies)} loại tiền tệ ({', '.join(sorted(str(c) for c in currencies))}). Tổng số được tính gộp nhiều currency — cần quy đổi để so sánh chính xác."
+    return None
 
 
 def _frame_to_markdown(df: pd.DataFrame, max_rows: int = 20) -> str:

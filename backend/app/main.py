@@ -93,6 +93,7 @@ async def upload_dataset(files: list[UploadFile] = File(...)) -> UploadResponse:
         preview_df = session.dataframe.head(10)
         preview_columns = [str(c) for c in preview_df.columns]
         preview_rows = preview_df.astype(str).where(preview_df.notna(), None).to_dict(orient="records")
+        suggested_queries = _generate_suggested_queries(session.dataframe, profile)
 
         return UploadResponse(
             session_id=session.session_id,
@@ -104,6 +105,7 @@ async def upload_dataset(files: list[UploadFile] = File(...)) -> UploadResponse:
             sheets_context=session.sheets_context if sheet_names and len(sheet_names) > 1 else None,
             preview_columns=preview_columns,
             preview_rows=preview_rows,
+            suggested_queries=suggested_queries,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -150,6 +152,49 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
         executed_queries=executed_queries,
         guardrails=describe_guardrails(),
     )
+
+
+def _generate_suggested_queries(df, profile: dict) -> list[str]:
+    """Generate relevant example queries based on dataset schema."""
+    import pandas as pd
+    suggestions = []
+    numeric_cols = list(profile.get("numeric_summary", {}).keys())
+    cat_cols = list(profile.get("categorical_summary", {}).keys())
+    datetime_cols = [c for c, t in profile.get("column_types", {}).items() if "datetime" in str(t)]
+
+    metric = numeric_cols[0] if numeric_cols else None
+    dim1 = cat_cols[0] if cat_cols else None
+    dim2 = cat_cols[1] if len(cat_cols) > 1 else None
+
+    # Status/stage-like column detection
+    status_col = next((c for c in cat_cols if any(kw in c.lower() for kw in ("status", "trang_thai", "state", "stage"))), None)
+    # Amount/value column
+    amount_col = next((c for c in numeric_cols if any(kw in c.lower() for kw in ("amount", "value", "total", "sum", "revenue", "cost", "price", "doanh", "tien"))), metric)
+
+    if amount_col and dim1:
+        suggestions.append(f"tổng {amount_col} theo {dim1}")
+    if amount_col and dim2:
+        suggestions.append(f"top 10 {dim2} theo {amount_col}")
+    if amount_col and status_col:
+        suggestions.append(f"{amount_col} trung bình theo {status_col}")
+    if status_col:
+        suggestions.append(f"số lượng record theo {status_col}")
+    if amount_col and dim1 and dim2:
+        suggestions.append(f"so sánh {amount_col} theo {dim1} và {dim2}")
+    if datetime_cols and amount_col:
+        suggestions.append(f"trend {amount_col} theo tháng")
+    if amount_col:
+        suggestions.append(f"top 5 {amount_col} lớn nhất")
+
+    # Try to detect high-value outliers hint
+    if amount_col and amount_col in df.columns:
+        try:
+            q95 = float(df[amount_col].quantile(0.95))
+            suggestions.append(f"{amount_col} > {q95:,.0f} (top 5%)")
+        except Exception:
+            pass
+
+    return suggestions[:8]
 
 
 @app.post("/api/chat", response_model=ChatResponse)
