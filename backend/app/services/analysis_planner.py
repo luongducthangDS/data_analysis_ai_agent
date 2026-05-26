@@ -70,36 +70,34 @@ def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
 
 
 def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
-    """Rule-light fallback used only if LLM planning fails."""
+    """Rule-based fallback when LLM planning fails. Covers common DA/accounting patterns."""
     normalized = _normalize(question)
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
+    cat_cols_all = df.select_dtypes(include=["object", "category"]).columns.tolist()
 
-    if ("q1" in normalized or "q2" in normalized or "quy" in normalized) and datetime_cols:
-        metric = _pick_metric(df, ("revenue", "doanh thu", "sales")) or (numeric_cols[0] if numeric_cols else "")
-        return {
-            "action": "time_series",
-            "derived_columns": [{"name": "quarter", "operation": "quarter", "source": datetime_cols[0]}],
-            "filters": _quarter_filters(normalized, datetime_cols[0], 2024),
-            "time_column": "quarter",
-            "grain": "quarter",
-            "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
-            "sort": [{"column": "quarter", "direction": "asc"}],
-            "limit": 20,
-        }
+    metric = _pick_metric_from_question(normalized, df) or (numeric_cols[0] if numeric_cols else None)
+    top_n = _extract_top_n(normalized) or 10
+    asc = any(kw in normalized for kw in ("nho nhat", "thap nhat", "it nhat", "lowest", "smallest", "bottom"))
+    sort_dir = "asc" if asc else "desc"
 
-    if "discount" in normalized and any("quantity" == col.lower() for col in df.columns):
+    # ── 1. Time series: "theo tháng / quý / năm" ──────────────────────────────
+    if datetime_cols:
+        if any(kw in normalized for kw in ("thang", "month")):
+            return _time_series_plan(datetime_cols[0], "month", metric, normalized)
+        if any(kw in normalized for kw in ("quy", "quarter", "q1", "q2", "q3", "q4")):
+            return _time_series_plan(datetime_cols[0], "quarter", metric, normalized)
+        if any(kw in normalized for kw in (" nam ", "yearly", "annual")):
+            return _time_series_plan(datetime_cols[0], "year", metric, normalized)
+
+    # ── 2. Discount revenue ────────────────────────────────────────────────────
+    if "discount" in normalized and any("quantity" == c.lower() for c in df.columns):
         return {
             "action": "compare_metrics",
             "derived_columns": [
                 {"name": "gross_revenue", "operation": "multiply", "columns": ["quantity", "unit_price"]},
-                {
-                    "name": "net_revenue_after_discount",
-                    "operation": "net_revenue_from_discount_pct",
-                    "quantity": "quantity",
-                    "unit_price": "unit_price",
-                    "discount_pct": "discount_pct",
-                },
+                {"name": "net_revenue_after_discount", "operation": "net_revenue_from_discount_pct",
+                 "quantity": "quantity", "unit_price": "unit_price", "discount_pct": "discount_pct"},
             ],
             "metrics": [
                 {"column": "gross_revenue", "aggregation": "sum", "label": "Doanh thu gốc"},
@@ -107,50 +105,238 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
             ],
         }
 
-    intent = infer_grouped_metric_intent(question, df)
-    if intent:
+    # ── 3. Status filters: "chưa thanh toán", "rejected", "pending" ───────────
+    status_col = _find_col_by_keywords(cat_cols_all, ("status", "trang_thai", "state", "stage"))
+    status_filters = _detect_status_filters(normalized, df, status_col)
+
+    # ── 4. "so sánh X vs Y" — filter + group ──────────────────────────────────
+    vs_values = _detect_vs_comparison(normalized, df, cat_cols_all)
+    if vs_values and metric:
+        col, vals = vs_values
+        agg = _detect_aggregation(normalized)
         return {
             "action": "aggregate",
-            "group_by": [intent.dimension],
-            "metrics": [{"column": intent.metric, "aggregation": "sum", "label": intent.metric_label}],
-            "sort": [{"column": intent.metric, "direction": "desc"}],
-            "limit": intent.top_n or 10,
+            "filters": [{"column": col, "operator": "in", "value": vals}],
+            "group_by": [col],
+            "metrics": [{"column": metric, "aggregation": agg, "label": f"{agg.capitalize()} {metric}"},
+                        {"column": _find_id_col(df) or metric, "aggregation": "count", "label": "Số records"}],
+            "sort": [{"column": f"{agg.capitalize()} {metric}", "direction": "desc"}],
+            "limit": 20,
         }
 
-    # Detect "theo [categorical_value]" — e.g. "doanh thu theo travel" where "travel" is a value in Category
-    value_filter = _detect_value_filter(normalized, df)
-    if value_filter and numeric_cols:
-        col, val = value_filter
-        metric = _pick_metric(df, ("revenue", "doanh thu", "sales", "amount")) or numeric_cols[0]
-        # Pick best groupby: low-cardinality categorical col (not the filter col, not ID cols)
-        cat_cols = [
-            c for c in df.select_dtypes(include=["object", "category"]).columns
-            if c != col and 1 < df[c].nunique() <= 30 and not _normalize(c).endswith("id")
-        ]
-        if cat_cols:
-            group_col = min(cat_cols, key=lambda c: df[c].nunique())
-            return {
-                "action": "aggregate",
-                "filters": [{"column": col, "operator": "eq", "value": val}],
-                "group_by": [group_col],
-                "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
-                "sort": [{"column": metric, "direction": "desc"}],
-                "limit": 20,
-            }
-        else:
-            # No good dimension → just return total
-            return {
-                "action": "compare_metrics",
-                "filters": [{"column": col, "operator": "eq", "value": val}],
-                "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric} ({val})"}],
-            }
+    # ── 5. Direct column name match for dimension ──────────────────────────────
+    dim = _match_dimension_from_question(normalized, df, cat_cols_all)
+    intent = infer_grouped_metric_intent(question, df)
+    if not dim and intent:
+        dim = intent.dimension
 
+    # Use status_col as dimension if question mentions status keywords but no other dim found
+    if not dim and status_filters and status_col:
+        dim = status_col
+    if not dim and status_col and any(kw in normalized for kw in ("trang thai", "status", "trang_thai")):
+        dim = status_col
+
+    if dim and metric:
+        agg = _detect_aggregation(normalized)
+        filters = status_filters or []
+        return {
+            "action": "aggregate",
+            "filters": filters,
+            "group_by": [dim],
+            "metrics": [{"column": metric, "aggregation": agg, "label": f"{agg.capitalize()} {metric}"}],
+            "sort": [{"column": f"{agg.capitalize()} {metric}", "direction": sort_dir}],
+            "limit": top_n,
+        }
+
+    # ── 6. "top N [metric]" — sort only, no grouping ──────────────────────────
+    if metric and any(kw in normalized for kw in ("top", "lon nhat", "nhieu nhat", "cao nhat", "nho nhat", "thap nhat")):
+        filters = status_filters or []
+        return {
+            "action": "aggregate",
+            "filters": filters,
+            "group_by": [_find_id_col(df) or cat_cols_all[0]] if cat_cols_all else [],
+            "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
+            "sort": [{"column": metric, "direction": sort_dir}],
+            "limit": top_n,
+        }
+
+    # ── 7. Value filter: "doanh thu theo Travel" ──────────────────────────────
+    value_filter = _detect_value_filter(normalized, df)
+    if value_filter and metric:
+        col, val = value_filter
+        good_cat = [c for c in cat_cols_all if c != col and 1 < df[c].nunique() <= 30
+                    and not _normalize(c).endswith("id")]
+        group_col = min(good_cat, key=lambda c: df[c].nunique()) if good_cat else col
+        return {
+            "action": "aggregate",
+            "filters": [{"column": col, "operator": "eq", "value": val}],
+            "group_by": [group_col],
+            "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
+            "sort": [{"column": metric, "direction": "desc"}],
+            "limit": 20,
+        }
+
+    # ── 8. Last resort ─────────────────────────────────────────────────────────
     if numeric_cols:
         return {
             "action": "compare_metrics",
-            "metrics": [{"column": col, "aggregation": "sum", "label": col} for col in numeric_cols[:4]],
+            "metrics": [{"column": c, "aggregation": "sum", "label": c} for c in numeric_cols[:4]],
         }
     return {"action": "profile"}
+
+
+# ── Fallback helpers ───────────────────────────────────────────────────────────
+
+def _time_series_plan(dt_col: str, grain: str, metric: str | None, normalized: str) -> dict[str, Any]:
+    if not metric:
+        return {"action": "profile"}
+    filters = []
+    year_match = re.search(r"\b(20\d{2})\b", normalized)
+    if year_match:
+        year = year_match.group(1)
+        filters.append({"column": dt_col, "operator": "between", "value": [f"{year}-01-01", f"{year}-12-31"]})
+    derived = []
+    time_col = grain
+    if grain == "quarter":
+        derived = [{"name": "quarter", "operation": "quarter", "source": dt_col}]
+        time_col = "quarter"
+    return {
+        "action": "time_series",
+        "derived_columns": derived,
+        "filters": filters,
+        "time_column": time_col if not derived else None,
+        **({"time_column": dt_col} if not derived else {"time_column": "quarter"}),
+        "grain": grain,
+        "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
+        "sort": [{"column": grain, "direction": "asc"}],
+        "limit": 24,
+    }
+
+
+def _pick_metric_from_question(normalized: str, df: pd.DataFrame) -> str | None:
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    # Direct column name in question
+    for col in numeric_cols:
+        if _normalize(col) in normalized:
+            return col
+    # Keyword match
+    return _pick_metric(df, ("amount", "revenue", "doanh thu", "sales", "total", "cost", "price", "value", "tien"))
+
+
+# Synonym map: Vietnamese/English phrase -> keyword that appears in column name
+_SYNONYMS: list[tuple[str, str]] = [
+    ("trang thai", "status"),
+    ("trang_thai", "status"),
+    ("nhan vien", "employee"),
+    ("employee", "employee"),
+    ("nguoi duyet", "approved"),
+    ("manager", "approved"),
+    ("approvedby", "approved"),
+    ("quan ly", "approved"),
+    ("loai", "category"),
+    ("phan loai", "category"),
+    ("don vi tien", "currency"),
+    ("tien te", "currency"),
+    ("ngay", "date"),
+]
+
+
+def _match_dimension_from_question(normalized: str, df: pd.DataFrame, cat_cols: list[str]) -> str | None:
+    """Find a categorical column whose name (or partial name) appears in the question."""
+    for col in cat_cols:
+        col_norm = _normalize(col)
+        # Exact match
+        if col_norm in normalized:
+            return col
+        # Partial: any word in col_norm appears in question (min 4 chars to avoid noise)
+        for word in col_norm.split():
+            if len(word) >= 4 and word in normalized:
+                return col
+        # Reverse: any word from question (min 4 chars) appears as substring of col_norm
+        # Skip ID columns (high cardinality, not useful as dimensions)
+        is_id_col = col_norm.endswith("id") or col_norm.endswith("_id") or col_norm == "id"
+        if not is_id_col:
+            for qword in normalized.split():
+                if len(qword) >= 4 and qword in col_norm:
+                    return col
+    # Synonym fallback: map Vietnamese phrase -> column keyword
+    for phrase, keyword in _SYNONYMS:
+        if phrase in normalized:
+            for col in cat_cols:
+                if keyword in _normalize(col):
+                    return col
+    return None
+
+
+def _detect_aggregation(normalized: str) -> str:
+    if any(kw in normalized for kw in ("trung binh", "average", "mean", "avg")):
+        return "mean"
+    if any(kw in normalized for kw in ("so luong", "count", "dem", "bao nhieu")):
+        return "count"
+    if any(kw in normalized for kw in ("lon nhat", "max", "cao nhat")):
+        return "max"
+    if any(kw in normalized for kw in ("nho nhat", "min", "thap nhat")):
+        return "min"
+    return "sum"
+
+
+def _detect_status_filters(normalized: str, df: pd.DataFrame, status_col: str | None) -> list[dict]:
+    if not status_col:
+        return []
+    status_keywords = {
+        "chua thanh toan": ("ne", "Paid"),
+        "chua duyet": ("in", ["Submitted", "Pending"]),
+        "rejected": ("eq", "Rejected"),
+        "bi tu choi": ("eq", "Rejected"),
+        "da duyet": ("eq", "Approved"),
+        "da thanh toan": ("eq", "Paid"),
+        "paid": ("eq", "Paid"),
+        "approved": ("eq", "Approved"),
+        "submitted": ("eq", "Submitted"),
+    }
+    for kw, (op, val) in status_keywords.items():
+        if kw in normalized:
+            return [{"column": status_col, "operator": op, "value": val}]
+    return []
+
+
+def _detect_vs_comparison(normalized: str, df: pd.DataFrame, cat_cols: list[str]) -> tuple[str, list[str]] | None:
+    """Detect 'X vs Y' or 'so sánh X và Y' patterns."""
+    # Pattern: "X vs Y" or "so sanh X va Y"
+    vs_match = re.search(r"\bvs\b|\bversus\b", normalized)
+    va_match = re.search(r"so sanh\s+([\w]+)\s+va\s+([\w]+)", normalized)
+    pairs = []
+    if vs_match:
+        before = normalized[:vs_match.start()].strip().split()
+        after = normalized[vs_match.end():].strip().split()
+        if before and after:
+            pairs.append((before[-1], after[0]))
+    if va_match:
+        pairs.append((va_match.group(1), va_match.group(2)))
+    for v1, v2 in pairs:
+        for col in cat_cols:
+            vals_lower = {str(v).lower(): str(v) for v in df[col].dropna().unique()}
+            if v1 in vals_lower and v2 in vals_lower:
+                return col, [vals_lower[v1], vals_lower[v2]]
+    return None
+
+
+def _find_col_by_keywords(cols: list[str], keywords: tuple[str, ...]) -> str | None:
+    for col in cols:
+        if any(kw in _normalize(col) for kw in keywords):
+            return col
+    return None
+
+
+def _find_id_col(df: pd.DataFrame) -> str | None:
+    """Find a meaningful ID/name column to use as dimension."""
+    cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    # Prefer: not high cardinality ID, not pure ID suffix
+    for col in cat_cols:
+        n = df[col].nunique()
+        if 1 < n <= 50 and not _normalize(col).endswith("id"):
+            return col
+    return None
 
 
 def _detect_value_filter(normalized_question: str, df: pd.DataFrame) -> tuple[str, str] | None:
@@ -513,7 +699,6 @@ def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any]
 
 
 def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
-    # Build filter context string for display
     filters = plan.get("filters", []) or []
     filter_desc = ""
     if filters:
@@ -528,7 +713,6 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
         lines.append("Không có dữ liệu phù hợp với điều kiện phân tích.")
         return "\n".join(lines)
 
-    # Multi-currency warning
     currency_warning = _build_currency_warning(source_df, plan)
     if currency_warning:
         lines.append(f"⚠️  {currency_warning}")
@@ -553,7 +737,7 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
         dim = result.columns[0]
         metric = numeric_cols[0]
         total = sum(float(r[metric]) for r in result.to_dict(orient="records") if r[metric] is not None)
-        lines.append(f"### Xếp hạng / kết quả")
+        lines.append("### Xếp hạng / kết quả")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
             val = row[metric]
             pct = f" ({float(val)/total*100:.1f}%)" if total and val is not None else ""
@@ -572,7 +756,6 @@ def _build_currency_warning(df: pd.DataFrame | None, plan: dict[str, Any]) -> st
     currency_cols = [c for c in df.columns if _normalize(c) in ("currency", "tien_te", "don_vi_tien")]
     if not currency_cols:
         return None
-    # Apply filters to get relevant subset
     try:
         work = _apply_filters(df, plan.get("filters", []) or [])
     except Exception:
@@ -722,7 +905,6 @@ def _mentioned_quarters(normalized_question: str) -> set[int]:
 
 def _normalize(text: Any) -> str:
     import unicodedata
-
     normalized = unicodedata.normalize("NFKD", str(text).strip().lower())
     normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
     return re.sub(r"\s+", " ", normalized)
@@ -738,3 +920,14 @@ def _chart(chart_type: str, title: str, fig: Any, x: str | None = None, y: str |
         "y": y,
         "plotly_json": json.loads(fig.to_json()),
     }
+
+
+def _extract_top_n(normalized: str) -> int | None:
+    """Extract N from 'top N', 'top-5', '5 lớn nhất' etc."""
+    m = re.search(r"\btop[\s\-]?(\d+)\b", normalized)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\b(\d+)\s*(?:lon nhat|nhieu nhat|cao nhat|nho nhat|thap nhat|largest|biggest|smallest)\b", normalized)
+    if m:
+        return int(m.group(1))
+    return None
