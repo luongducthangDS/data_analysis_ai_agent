@@ -31,6 +31,8 @@ class UploadResponse(BaseModel):
     sheet_names: list[str] | None = Field(default=None, description="List of sheet identifiers from uploaded files")
     file_sheet_map: dict[str, list[str]] | None = Field(default=None, description="Mapping of filename to sheet identifiers")
     sheets_context: str | None = Field(default=None, description="Description of sheet structure")
+    preview_columns: list[str] = Field(default_factory=list, description="Column names for table preview")
+    preview_rows: list[dict[str, Any]] = Field(default_factory=list, description="First 10 rows for table preview")
 
 
 class AnalyzeRequest(BaseModel):

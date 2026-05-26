@@ -5,6 +5,9 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from backend.app.schemas import (
     AnalyzeRequest,
@@ -22,6 +25,7 @@ from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.charts import generate_question_charts, generate_recommended_charts
 from backend.app.services.guardrails import describe_guardrails
 from backend.app.services.insights import generate_insights
+from backend.app.services.analysis_planner import run_planned_analysis
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer
 from backend.app.services.profiler import build_profile
 from backend.app.services.query_engine import run_readonly_query, simple_question_to_sql
@@ -86,6 +90,10 @@ async def upload_dataset(files: list[UploadFile] = File(...)) -> UploadResponse:
                 file_name, sheet_name = sheet_key, sheet_key
             file_sheet_map.setdefault(file_name, []).append(sheet_key)
 
+        preview_df = session.dataframe.head(10)
+        preview_columns = [str(c) for c in preview_df.columns]
+        preview_rows = preview_df.astype(str).where(preview_df.notna(), None).to_dict(orient="records")
+
         return UploadResponse(
             session_id=session.session_id,
             filename=session.filename,
@@ -94,6 +102,8 @@ async def upload_dataset(files: list[UploadFile] = File(...)) -> UploadResponse:
             sheet_names=sheet_names,
             file_sheet_map=file_sheet_map if file_sheet_map else None,
             sheets_context=session.sheets_context if sheet_names and len(sheet_names) > 1 else None,
+            preview_columns=preview_columns,
+            preview_rows=preview_rows,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -108,14 +118,25 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
 
     profile = session.profile or build_profile(session.dataframe)
     session.profile = profile
-    answer = generate_insights(
-        session.dataframe,
-        profile,
-        req.question,
-        sheets=session.sheets if session.sheets else None,
-        sheets_context=session.sheets_context if session.sheets_context else None,
-    )
-    charts = generate_question_charts(session.dataframe, req.question) or generate_recommended_charts(session.dataframe)
+    executed_queries: list[str] = []
+    try:
+        if req.question:
+            planned = run_planned_analysis(session.dataframe, req.question, profile)
+            answer = planned.answer
+            charts = planned.charts or generate_recommended_charts(session.dataframe)
+            executed_queries = planned.executed_queries
+        else:
+            raise ValueError("No question provided; use automatic analysis.")
+    except Exception as exc:
+        answer = generate_insights(
+            session.dataframe,
+            profile,
+            req.question,
+            sheets=session.sheets if session.sheets else None,
+            sheets_context=session.sheets_context if session.sheets_context else None,
+        )
+        charts = generate_question_charts(session.dataframe, req.question) or generate_recommended_charts(session.dataframe)
+        executed_queries = [f"fallback_analysis: {exc}"] if req.question else []
     report_id, _ = write_markdown_report(answer, profile, charts)
     session.report_id = report_id
     session.history.append({"role": "assistant", "content": answer})
@@ -126,6 +147,7 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
         profile=profile,
         charts=charts,
         report_id=report_id,
+        executed_queries=executed_queries,
         guardrails=describe_guardrails(),
     )
 
@@ -138,16 +160,23 @@ def chat_with_dataset(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        sql = simple_question_to_sql(req.question, session.dataframe)
-        rows = run_readonly_query(session.dataframe, sql)
+        profile = session.profile or build_profile(session.dataframe)
+        session.profile = profile
+        planned = run_planned_analysis(session.dataframe, req.question, profile)
+        answer = planned.answer
+        executed_queries = planned.executed_queries
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    answer = _format_chat_answer(req.question, session.dataframe, rows)
+        try:
+            sql = simple_question_to_sql(req.question, session.dataframe)
+            rows = run_readonly_query(session.dataframe, sql)
+            answer = _format_chat_answer(req.question, session.dataframe, rows)
+            executed_queries = [sql]
+        except Exception as fallback_exc:
+            raise HTTPException(status_code=400, detail=str(fallback_exc)) from exc
 
     session.history.append({"role": "user", "content": req.question})
     session.history.append({"role": "assistant", "content": answer})
-    return ChatResponse(session_id=req.session_id, answer=answer, executed_queries=[sql])
+    return ChatResponse(session_id=req.session_id, answer=answer, executed_queries=executed_queries)
 
 
 def _format_chat_answer(question: str, df, rows: list[dict]) -> str:

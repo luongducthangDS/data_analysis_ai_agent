@@ -31,12 +31,50 @@ class MultiSheetAnalyzer:
 
     @staticmethod
     def read_all_sheets(file_path: str) -> dict[str, pd.DataFrame]:
-        """Read all sheets from Excel file"""
+        """Read all sheets from Excel file with smart header detection."""
         try:
-            sheets = pd.read_excel(file_path, sheet_name=None)
-            return sheets
+            raw = pd.read_excel(file_path, sheet_name=None)
+            result = {}
+            for sheet_name, df in raw.items():
+                result[sheet_name] = MultiSheetAnalyzer._fix_header(file_path, sheet_name, df)
+            return result
         except Exception as exc:
             raise ValueError(f"Error reading Excel sheets: {str(exc)}") from exc
+
+    @staticmethod
+    def _fix_header(file_path: str, sheet_name: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Re-read with header=N when many columns are Unnamed (metadata row above real header)."""
+        if df.empty or len(df.columns) == 0:
+            return df
+        unnamed_ratio = sum(
+            1 for c in df.columns if str(c).startswith("Unnamed:") or str(c).startswith("[")
+        ) / len(df.columns)
+        if unnamed_ratio < 0.5:
+            return MultiSheetAnalyzer._coerce_numeric(df)
+        # Try skipping 1 to 4 rows to find the real header
+        for skip in range(1, 5):
+            try:
+                candidate = pd.read_excel(file_path, sheet_name=sheet_name, header=skip)
+                if candidate.empty:
+                    continue
+                new_unnamed = sum(
+                    1 for c in candidate.columns if str(c).startswith("Unnamed:")
+                ) / len(candidate.columns)
+                if new_unnamed < unnamed_ratio:
+                    return MultiSheetAnalyzer._coerce_numeric(candidate)
+            except Exception:
+                continue
+        return MultiSheetAnalyzer._coerce_numeric(df)
+
+    @staticmethod
+    def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
+        """Try to coerce object columns that look numeric to float."""
+        result = df.copy()
+        for col in result.select_dtypes(include="object").columns:
+            converted = pd.to_numeric(result[col], errors="coerce")
+            if converted.notna().sum() / max(len(result), 1) >= 0.7:
+                result[col] = converted
+        return result
 
     @staticmethod
     def analyze_sheets_metadata(sheets: dict[str, pd.DataFrame]) -> dict[str, SheetInfo]:
