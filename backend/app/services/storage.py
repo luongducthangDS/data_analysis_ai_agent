@@ -4,13 +4,17 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import re
 
 import pandas as pd
 
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer, SheetRelationship
 
 
-BASE_DATA_DIR = Path("data")
+# DATA_DIR env var lets Railway mount a persistent volume at a custom path.
+# Falls back to "data/" (relative to CWD = /app) for local dev.
+import os as _os
+BASE_DATA_DIR = Path(_os.getenv("DATA_DIR", "data"))
 UPLOAD_DIR = BASE_DATA_DIR / "uploads"
 REPORT_DIR = BASE_DATA_DIR / "reports"
 
@@ -55,6 +59,7 @@ class SessionStore:
             suffix = file_path.suffix.lower()
             if suffix == ".csv":
                 df = pd.read_csv(file_path)
+                df = self._coerce_datetime_columns(df)
                 sheet_key = Path(filename).stem
                 if sheet_key in all_sheets:
                     suffix_index = 1
@@ -65,6 +70,7 @@ class SessionStore:
             elif suffix in {".xlsx", ".xls"}:
                 file_sheets = MultiSheetAnalyzer.read_all_sheets(str(file_path))
                 for sheet_name, df in file_sheets.items():
+                    df = self._coerce_datetime_columns(df)
                     sheet_key = f"{Path(filename).stem}::{sheet_name}"
                     if sheet_key in all_sheets:
                         suffix_index = 1
@@ -155,10 +161,37 @@ class SessionStore:
     def _read_dataframe(file_path: Path) -> pd.DataFrame:
         suffix = file_path.suffix.lower()
         if suffix == ".csv":
-            return pd.read_csv(file_path)
+            return SessionStore._coerce_datetime_columns(pd.read_csv(file_path))
         if suffix in {".xlsx", ".xls"}:
-            return pd.read_excel(file_path)
+            return SessionStore._coerce_datetime_columns(pd.read_excel(file_path))
         raise ValueError("Only CSV, XLSX, and XLS files are supported.")
+
+    @staticmethod
+    def _coerce_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        date_name_pattern = re.compile(r"(date|time|ngay|thang|nam)", re.IGNORECASE)
+        for col in result.select_dtypes(include=["object", "string"]).columns:
+            series = result[col]
+            non_null = series.dropna()
+            if non_null.empty:
+                continue
+            should_try = bool(date_name_pattern.search(str(col)))
+            if not should_try:
+                sample = non_null.astype(str).head(20)
+                looks_like_date = sample.str.contains(
+                    r"\d{4}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}",
+                    regex=True,
+                ).mean() >= 0.85
+                if not looks_like_date:
+                    continue
+                parsed_sample = pd.to_datetime(sample, errors="coerce", format="mixed")
+                should_try = parsed_sample.notna().mean() >= 0.85
+            if not should_try:
+                continue
+            parsed = pd.to_datetime(series, errors="coerce", format="mixed")
+            if parsed.notna().sum() / max(len(non_null), 1) >= 0.85:
+                result[col] = parsed
+        return result
 
 
 session_store = SessionStore()
