@@ -10,24 +10,6 @@ healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# Environment variables required (set in Railway dashboard):
-# HF_TOKEN         — HuggingFace token for LLM inference (optional; enables AI insights)
-#                    Without it, the app falls back to deterministic template insights.
-# REPORT_DIR       — optional, defaults to data/reports/
-
-[[services]]
-name = "web"
-
-  [services.variables]
-  PORT = "8000"
-  PYTHONUNBUFFERED = "1"
-  PYTHONDONTWRITEBYTECODE = "1"
-  # DATA_DIR: set to your Railway volume mount path for persistent uploads/reports.
-  # If no volume is mounted, uploads and reports are lost on redeploy (stateless mode).
-  # DATA_DIR = "/data"
-  # Set GROQ_API_KEY in Railway dashboard → Variables tab (required for AI features)
-  # GROQ_API_KEY = ""
-
-# Note: this app is stateless per-session (data held in memory).
-# For persistence across restarts, mount a Railway volume at /app/data/reports
-# so generated reports survive deploys.
+# Environment variables — set in Railway dashboard → Variables tab:
+# GROQ_API_KEY   required for AI features
+# DATA_DIR       optional — set to volume mount path (e.g. /data) for persistent uploads/reports
