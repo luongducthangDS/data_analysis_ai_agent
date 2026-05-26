@@ -21,7 +21,7 @@ class GroqLLMClient:
         if not self.api_key:
             raise ValueError("GROQ_API_KEY not set.")
 
-    def generate(self, prompt: str, max_tokens: int = 700, temperature: float = 0.35) -> str:
+    def generate(self, prompt: str, max_tokens: int = 700, temperature: float = 0.35, top_p: float = 1.0) -> str:
         from groq import Groq
         client = Groq(api_key=self.api_key)
         resp = client.chat.completions.create(
@@ -29,6 +29,7 @@ class GroqLLMClient:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
         )
         content = resp.choices[0].message.content
         return (content or "").strip()
@@ -61,7 +62,7 @@ class GeminiLLMClient:
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY / GOOGLE_API_KEY not set.")
 
-    def generate(self, prompt: str, max_tokens: int = 700, temperature: float = 0.35) -> str:
+    def generate(self, prompt: str, max_tokens: int = 700, temperature: float = 0.35, top_p: float = 1.0) -> str:
         import google.generativeai as genai
         genai.configure(api_key=self.api_key)
         model = genai.GenerativeModel(
@@ -69,6 +70,7 @@ class GeminiLLMClient:
             generation_config=genai.types.GenerationConfig(
                 temperature=temperature,
                 max_output_tokens=max_tokens,
+                top_p=top_p,
             ),
         )
         resp = model.generate_content(prompt)
@@ -102,12 +104,13 @@ class HFLLMClient:
         if not self.api_token:
             raise ValueError("HF_TOKEN environment variable not set.")
 
-    def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.35) -> str:
+    def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.35, top_p: float = 1.0) -> str:
         payload = {
             "model": self.model_id,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "top_p": top_p,
         }
         resp = requests.post(
             f"{self.base_url}/chat/completions",
