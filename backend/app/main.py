@@ -59,20 +59,6 @@ def home() -> HTMLResponse:
     return HTMLResponse("<h2>Frontend not built. Run: cd frontend && npm run build</h2>", status_code=503)
 
 
-# Catch-all: serve index.html for SPA client-side routing (e.g. /dashboard, /report/*)
-# Must be defined BEFORE static mounts so API routes registered above take priority
-@app.get("/{full_path:path}", response_class=HTMLResponse)
-def spa_fallback(full_path: str) -> HTMLResponse:
-    # Don't intercept API routes (handled above) or asset paths
-    if full_path.startswith("api/") or full_path.startswith("assets/"):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404)
-    index = DIST_DIR / "index.html"
-    if index.exists():
-        return HTMLResponse(index.read_text())
-    return HTMLResponse("<h2>Frontend not built.</h2>", status_code=503)
-
-
 # Serve React static assets (js/css/images)
 _assets_dir = DIST_DIR / "assets"
 if _assets_dir.exists():
@@ -408,3 +394,14 @@ def download_report(report_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report not found.")
     return FileResponse(path, media_type="text/markdown", filename=f"report-{report_id}.md")
+
+
+# ── SPA catch-all — MUST be last, after all /api/* routes ────────────────────
+# FastAPI matches routes in registration order; placing this last ensures all
+# /api/* endpoints above are matched first.
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+def spa_fallback(full_path: str) -> HTMLResponse:
+    index = DIST_DIR / "index.html"
+    if index.exists():
+        return HTMLResponse(index.read_text())
+    return HTMLResponse("<h2>Frontend not built.</h2>", status_code=503)
