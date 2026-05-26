@@ -124,6 +124,15 @@ def render_home() -> str:
     .tab-content { display: none; padding: 18px; }
     .tab-content.active { display: block; }
 
+    /* ── Data table ── */
+    .table-wrap { overflow-x: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .data-table th { background: var(--surface2); padding: 8px 12px; text-align: left; font-weight: 600; color: var(--text2); border-bottom: 1px solid var(--border); white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .data-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table tr:hover td { background: var(--surface2); }
+    .table-footer { padding: 8px 12px; font-size: 11px; color: var(--text3); background: var(--surface2); border-top: 1px solid var(--border); }
+
     @media (max-width: 900px) { .layout { flex-direction: column; } .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; padding: 8px 12px; } .stats-bar { grid-template-columns: repeat(2, 1fr); } }
   </style>
 </head>
@@ -149,6 +158,10 @@ def render_home() -> str:
   <!-- Sidebar -->
   <nav class="sidebar">
     <span class="sidebar-section">Workspace</span>
+    <button class="nav-item" id="nav-preview" onclick="switchTab('preview')">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+      Data
+    </button>
     <button class="nav-item active" id="nav-analyze" onclick="switchTab('analyze')">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       Analyze
@@ -217,6 +230,18 @@ def render_home() -> str:
         <div class="stat-label">Missing</div>
         <div class="stat-value" id="stat-missing">—</div>
         <div class="stat-sub">null cells</div>
+      </div>
+    </div>
+
+    <!-- Data Preview panel -->
+    <div class="panel" id="tab-preview" style="display:none">
+      <div class="panel-header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        <span class="panel-title">Data Preview</span>
+        <span id="preview-badge" class="tag tag-indigo" style="margin-left:auto"></span>
+      </div>
+      <div class="panel-body" style="padding: 0;">
+        <div class="table-wrap" id="preview-table-wrap"></div>
       </div>
     </div>
 
@@ -317,7 +342,7 @@ def render_home() -> str:
       document.getElementById('stat-numeric').textContent = p.numeric_columns || 0;
       document.getElementById('stat-missing').textContent = (p.missing_cells || 0).toLocaleString();
       document.getElementById('stats-bar').style.display = 'grid';
-      document.getElementById('tab-analyze').style.display = 'block';
+      document.getElementById('tab-analyze').style.display = 'none';
       document.getElementById('tab-chat').style.display = 'none';
       document.getElementById('tab-report').style.display = 'none';
       document.getElementById('btn-analyze').disabled = false;
@@ -328,8 +353,9 @@ def render_home() -> str:
       document.getElementById('sidebar-filemeta').textContent = `${(p.rows||0).toLocaleString()} rows · ${p.columns||0} cols`;
       document.getElementById('sidebar-file-info').style.display = 'block';
       document.getElementById('sidebar-no-file').style.display = 'none';
+      if (data.preview_columns && data.preview_rows) renderPreviewTable(data.preview_columns, data.preview_rows, p.rows);
       setStatus('ready');
-      switchTab('analyze');
+      switchTab('preview');
     } catch(err) { setStatus('error'); alert('Lỗi kết nối: ' + err.message); }
   }
 
@@ -412,13 +438,38 @@ def render_home() -> str:
     });
   }
 
+  // ── Preview table ──
+  function renderPreviewTable(columns, rows, totalRows) {
+    const badge = document.getElementById('preview-badge');
+    badge.textContent = `${totalRows.toLocaleString()} rows`;
+    const wrap = document.getElementById('preview-table-wrap');
+    let html = '<table class="data-table"><thead><tr>';
+    columns.forEach(c => { html += `<th>${escHtml(c)}</th>`; });
+    html += '</tr></thead><tbody>';
+    rows.forEach(row => {
+      html += '<tr>';
+      columns.forEach(c => { html += `<td>${escHtml(row[c] ?? '')}</td>`; });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    if (totalRows > rows.length) html += `<div class="table-footer">Hiển thị ${rows.length} / ${totalRows.toLocaleString()} dòng</div>`;
+    wrap.innerHTML = html;
+    document.getElementById('tab-preview').style.display = 'block';
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
   // ── Tabs ──
   function switchTab(tab) {
     currentTab = tab;
-    ['analyze','chat','report'].forEach(t => {
-      document.getElementById('nav-' + t).classList.toggle('active', t === tab);
+    ['preview','analyze','chat','report'].forEach(t => {
+      const el = document.getElementById('nav-' + t);
+      if (el) el.classList.toggle('active', t === tab);
     });
     if (!sessionId) return;
+    document.getElementById('tab-preview').style.display = tab === 'preview' ? 'block' : 'none';
     document.getElementById('tab-analyze').style.display = tab === 'analyze' ? 'block' : 'none';
     document.getElementById('tab-chat').style.display = tab === 'chat' ? 'block' : 'none';
     document.getElementById('tab-report').style.display = tab === 'report' ? 'block' : 'none';
