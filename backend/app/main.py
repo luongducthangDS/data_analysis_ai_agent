@@ -27,6 +27,7 @@ from backend.app.schemas import (
     SheetData,
 )
 from backend.app.services.agent_runner import run_agent
+from backend.app.services.llm_service import get_active_provider
 from backend.app.services.workspace_connectors import fetch_from_url, fetch_from_gsheet
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.charts import generate_question_charts, generate_recommended_charts
@@ -78,7 +79,11 @@ else:
 
 @app.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", sessions=session_store.count())
+    return HealthResponse(
+        status="ok",
+        sessions=session_store.count(),
+        llm_provider=get_active_provider(),
+    )
 
 
 def _build_upload_response(uploads: list[tuple[str, bytes]]) -> UploadResponse:

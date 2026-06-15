@@ -18,24 +18,27 @@ def generate_insights(
     sheets: dict[str, pd.DataFrame] | None = None,
     sheets_context: str | None = None,
 ) -> str:
-    """Generate an executive-ready analysis with deterministic facts first."""
-    focused = _generate_focused_grouped_metric_answer(df, question)
-    if focused:
-        return focused
+    """Generate an executive-ready analysis, always attempting LLM synthesis."""
+    import logging
+    _log = logging.getLogger(__name__)
 
-    deterministic_answer = _generate_template_insights(df, profile, question, sheets=sheets)
+    # Compute deterministic facts first — used as LLM context
+    focused = _generate_focused_grouped_metric_answer(df, question)
+    deterministic = _generate_template_insights(df, profile, question, sheets=sheets)
+    grounding = focused or deterministic
 
     try:
-        from backend.app.services.llm_service import get_llm_client
-
+        from backend.app.services.llm_service import get_llm_client, get_active_provider
         client = get_llm_client()
-        context = _build_context_for_llm(df, profile, question, sheets=sheets, sheets_context=sheets_context)
+        _log.info("generate_insights: calling LLM (%s) for question=%r", get_active_provider(), question)
+        context = _build_context_for_llm(df, profile, question, sheets=sheets,
+                                         sheets_context=sheets_context, grounding=grounding)
         if question:
             return client.answer_question(question, context, max_tokens=700)
         return client.generate_insights(context, max_tokens=900)
     except Exception as exc:
-        print(f"LLM inference failed, falling back to deterministic analysis: {exc}")
-        return deterministic_answer
+        _log.warning("LLM inference failed (%s), using deterministic answer.", exc)
+        return grounding
 
 
 def _generate_focused_grouped_metric_answer(df: pd.DataFrame, question: str | None) -> str | None:
@@ -222,16 +225,17 @@ def _build_context_for_llm(
     question: str | None,
     sheets: dict[str, pd.DataFrame] | None = None,
     sheets_context: str | None = None,
+    grounding: str | None = None,
 ) -> str:
-    deterministic = _generate_template_insights(df, profile, question, sheets=sheets)
+    facts = grounding or _generate_template_insights(df, profile, question, sheets=sheets)
     lines = [
         "Bạn là trợ lý phân tích dữ liệu cho CEO. Chỉ dùng các số liệu đã tính sẵn trong context, không bịa thêm số.",
         "Trả lời bằng tiếng Việt, có cấu trúc: Tóm tắt điều hành, Phát hiện chính, Rủi ro, Hành động đề xuất.",
         "",
-        "Phân tích đã tính sẵn:",
-        deterministic,
+        "Số liệu đã tính sẵn từ dữ liệu thực:",
+        facts,
         "",
-        "Mẫu dữ liệu:",
+        "Mẫu dữ liệu (8 dòng đầu):",
         df.head(8).to_string(),
     ]
     if sheets_context:

@@ -68,6 +68,7 @@ class ChatResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     sessions: int
+    llm_provider: str = "unknown"
 
 
 class SheetData(BaseModel):
