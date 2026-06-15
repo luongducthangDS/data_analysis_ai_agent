@@ -1,18 +1,17 @@
 """
 Data Analysis AI Agent — Demo & Eval Dashboard
 ===============================================
-Mirrors chính xác luồng của deployed web app:
-  - Upload CSV/XLSX
-  - Chat với 3 mode: Phân tích / SQL / Agent
-  - Bot info & off-topic được xử lý đúng cách
-  - 100 câu hỏi eval tự động với metrics đầy đủ
+Tab 1 "💬 Demo": iframe nhúng trực tiếp React app đang chạy trên backend
+  → giao diện y hệt deployed app (dark theme, sidebar, chat bubbles, ...)
+Tab 2 "🧪 Eval": 100 câu hỏi tự động với metrics đầy đủ
+Tab 3 "ℹ️ About": breakdown câu hỏi + scoring rubric
 
 Cài đặt:   pip install streamlit requests pandas plotly
 Chạy:      streamlit run evals/eval_streamlit.py
+           (backend phải chạy trước: uvicorn backend.app.main:app --reload)
 """
 from __future__ import annotations
 
-import json
 import re
 import time
 from pathlib import Path
@@ -20,20 +19,21 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="Data Analysis AI Agent",
+    page_title="DataAgent — Demo & Eval",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 DEFAULT_API = "http://localhost:8000"
 DEFAULT_CSV = str(Path(__file__).parent.parent / "sales_data.csv")
+DEMO_HEIGHT = 780  # iframe height in px
 
 CATEGORY_COLORS = {
     "aggregation": "#4CAF50", "filter": "#2196F3", "ranking": "#FF9800",
@@ -79,178 +79,65 @@ def _call(api_url: str, session_id: str, question: str, mode: str) -> dict:
                 "answer": "", "charts": [], "agent_steps": [], "executed_queries": [],
                 "query_type": "error", "error": str(exc)}
 
+# ── Top bar (thay sidebar — collapsed) ────────────────────────────────────────
 
-def _show_charts(charts: list[dict]) -> None:
-    if not charts:
-        return
-    cols = st.columns(min(len(charts), 2))
-    for i, c in enumerate(charts):
-        with cols[i % 2]:
-            try:
-                fig = go.Figure(c["plotly_json"])
-                fig.update_layout(margin=dict(l=20, r=20, t=40, b=40), height=300)
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-            except Exception:
-                st.json(c.get("plotly_json", {}))
-
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-
-def sidebar() -> str:
-    with st.sidebar:
-        st.title("📊 AI Agent")
-        api_url = st.text_input("API URL", DEFAULT_API)
-
-        st.divider()
-        if st.button("🏥 Health check", use_container_width=True):
-            try:
-                r = requests.get(f"{api_url}/api/health", timeout=5)
-                if r.ok:
-                    j = r.json()
-                    st.success(f"✅ Online")
-                    st.caption(f"Sessions: {j.get('sessions',0)}")
-                    st.caption(f"LLM: `{j.get('llm_provider','?')}`")
-                else:
-                    st.error(f"❌ {r.status_code}")
-            except Exception as exc:
-                st.error(f"❌ {exc}")
-
-        st.divider()
-        st.caption("**Chế độ chat:**")
-        st.caption("📊 **Phân tích** — AI plan + LLM")
-        st.caption("⚡ **SQL** — planner nhanh + charts")
-        st.caption("🤖 **Agent** — đa bước, dùng tools")
-
+def topbar() -> str:
+    c1, c2, c3 = st.columns([3, 1, 1])
+    api_url = c1.text_input("🔗 Backend URL", DEFAULT_API, label_visibility="collapsed",
+                            placeholder="http://localhost:8000")
+    if c2.button("🏥 Health", use_container_width=True):
+        try:
+            r = requests.get(f"{api_url}/api/health", timeout=5)
+            if r.ok:
+                j = r.json()
+                c3.success(f"✅ {j.get('llm_provider','?')[:20]}")
+            else:
+                c3.error(f"❌ {r.status_code}")
+        except Exception as exc:
+            c3.error(f"❌ offline")
     return api_url
 
-# ── Tab 1: Demo Chat ───────────────────────────────────────────────────────────
+# ── Tab 1: Demo — iframe vào React app thực ───────────────────────────────────
 
-def tab_chat(api_url: str) -> None:
-    # ── Upload section ────────────────────────────────────────────────────────
-    with st.expander("📁 Upload dữ liệu", expanded="session_id" not in st.session_state):
-        uploaded = st.file_uploader(
-            "Chọn file CSV hoặc XLSX (tối đa 10MB)",
-            type=["csv", "xlsx", "xls"],
-            accept_multiple_files=False,
+def tab_demo(api_url: str) -> None:
+    """
+    Nhúng trực tiếp React frontend thông qua iframe.
+    Backend đã serve React build tại gốc ("/"), nên iframe trỏ vào api_url
+    là cách duy nhất đảm bảo UI giống 100% với deployed app.
+    """
+    # Kiểm tra backend còn sống không
+    alive = False
+    try:
+        r = requests.get(f"{api_url}/api/health", timeout=3)
+        alive = r.ok
+    except Exception:
+        pass
+
+    if not alive:
+        st.warning(
+            f"**Backend không phản hồi** tại `{api_url}`\n\n"
+            "Chạy backend trước:\n"
+            "```\nuvicorn backend.app.main:app --reload --port 8000\n```\n"
+            "Sau đó refresh trang này."
         )
-        if uploaded:
-            mime_map = {
-                ".csv":  "text/csv",
-                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ".xls":  "application/vnd.ms-excel",
-            }
-            ext = Path(uploaded.name).suffix.lower()
-            with st.spinner("Đang upload và phân tích..."):
-                try:
-                    result = _upload_file(api_url, uploaded.name, uploaded.read(), mime_map.get(ext, "text/csv"))
-                    st.session_state["session_id"] = result["session_id"]
-                    st.session_state["upload_result"] = result
-                    st.session_state["messages"] = []
-                    st.success(f"✅ Upload thành công — `{result['session_id'][:16]}...`")
-                except Exception as exc:
-                    st.error(f"Upload thất bại: {exc}")
-
-    # ── Profile summary ───────────────────────────────────────────────────────
-    if "upload_result" in st.session_state:
-        res = st.session_state["upload_result"]
-        prof = res.get("profile", {})
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Rows",    prof.get("rows", "-"))
-        c2.metric("Columns", prof.get("columns", "-"))
-        c3.metric("File",    res.get("filename", "-"))
-        c4.metric("Session", res.get("session_id","")[:12] + "...")
-
-        # Suggested queries as clickable chips
-        suggested = res.get("suggested_queries", [])
-        if suggested:
-            st.caption("💡 **Gợi ý câu hỏi** — click để dùng:")
-            cols = st.columns(min(len(suggested), 4))
-            for i, q in enumerate(suggested[:8]):
-                if cols[i % 4].button(q[:40], key=f"sug_{i}", use_container_width=True):
-                    st.session_state["prefill"] = q
-
-    # ── Chat history ──────────────────────────────────────────────────────────
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = []
-
-    for msg in st.session_state["messages"]:
-        with st.chat_message(msg["role"], avatar="🧑" if msg["role"] == "user" else "🤖"):
-            st.markdown(msg["content"])
-            if msg.get("charts"):
-                _show_charts(msg["charts"])
-            if msg.get("agent_steps"):
-                with st.expander(f"🔧 Agent steps ({len(msg['agent_steps'])})"):
-                    for step in msg["agent_steps"]:
-                        st.markdown(f"**Step {step.get('step')}: `{step.get('tool_name')}`**")
-                        st.caption(step.get("result_summary", "")[:200])
-                        if step.get("charts"):
-                            _show_charts(step["charts"])
-            if msg.get("latency_ms"):
-                st.caption(f"⏱ {msg['latency_ms']} ms · {msg.get('query_type','data_query')}")
-
-    # ── Input area ────────────────────────────────────────────────────────────
-    if "session_id" not in st.session_state:
-        st.info("👆 Upload file dữ liệu để bắt đầu chat.")
         return
 
-    prefill = st.session_state.pop("prefill", "")
-    question = st.chat_input(
-        "Hỏi về dữ liệu của bạn... (vd: Tổng revenue theo category?)",
-    ) or prefill
+    # Inject CSS để xóa padding mặc định của Streamlit, iframe chiếm toàn bộ chiều cao
+    st.markdown(
+        """
+        <style>
+        /* Xóa padding của block container để iframe full-width */
+        [data-testid="stMainBlockContainer"] { padding: 0 !important; max-width: 100% !important; }
+        [data-testid="block-container"]      { padding: 0 !important; max-width: 100% !important; }
+        .stApp > header                       { display: none; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if not question:
-        # Mode buttons at bottom
-        bcol1, bcol2, bcol3 = st.columns(3)
-        if bcol1.button("📊 Phân tích", use_container_width=True):
-            st.session_state["pending_mode"] = "analyze"
-        if bcol2.button("⚡ SQL",       use_container_width=True):
-            st.session_state["pending_mode"] = "chat"
-        if bcol3.button("🤖 Agent",     use_container_width=True):
-            st.session_state["pending_mode"] = "agent"
-        return
-
-    # Determine mode — default to analyze
-    mode = st.session_state.pop("pending_mode", "analyze")
-
-    # Show user message
-    st.session_state["messages"].append({"role": "user", "content": question})
-    with st.chat_message("user", avatar="🧑"):
-        st.markdown(question)
-
-    # Call API
-    with st.chat_message("assistant", avatar="🤖"):
-        with st.spinner("Đang phân tích..."):
-            result = _call(api_url, st.session_state["session_id"], question, mode)
-
-        if result["error"]:
-            st.error(f"Lỗi: {result['error']}")
-            answer = f"❌ {result['error']}"
-        else:
-            st.markdown(result["answer"])
-            _show_charts(result.get("charts", []))
-
-            if result.get("agent_steps"):
-                with st.expander(f"🔧 Agent steps ({len(result['agent_steps'])})"):
-                    for step in result["agent_steps"]:
-                        st.markdown(f"**Step {step.get('step')}: `{step.get('tool_name')}`**")
-                        st.caption(step.get("result_summary", "")[:200])
-
-            qtype = result.get("query_type", "data_query")
-            badge = {"bot_info": "🤖 bot_info", "off_topic": "🚫 off_topic", "data_query": "📊 data_query"}.get(qtype, qtype)
-            st.caption(f"⏱ {result['ms']} ms · {badge} · mode: {mode}")
-            answer = result["answer"]
-
-    st.session_state["messages"].append({
-        "role": "assistant",
-        "content": answer,
-        "charts": result.get("charts", []),
-        "agent_steps": result.get("agent_steps", []),
-        "latency_ms": result["ms"],
-        "query_type": result.get("query_type", "data_query"),
-    })
-
-    if st.button("🗑 Xóa lịch sử chat"):
-        st.session_state["messages"] = []
-        st.rerun()
+    # Tính chiều cao viewport: dùng window.innerHeight qua HTML trick
+    height = DEMO_HEIGHT
+    components.iframe(api_url, height=height, scrolling=False)
 
 # ── Question bank (100 questions) ─────────────────────────────────────────────
 # kw:    keywords — ≥40% phải xuất hiện trong answer để pass
@@ -848,11 +735,18 @@ def tab_about() -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    api_url = sidebar()
-    t_chat, t_eval, t_about = st.tabs(["💬 Demo Chat", "🧪 Eval (100Q)", "ℹ️ About"])
+    # Hide default Streamlit menu + footer
+    st.markdown(
+        "<style>#MainMenu{visibility:hidden}footer{visibility:hidden}</style>",
+        unsafe_allow_html=True,
+    )
 
-    with t_chat:
-        tab_chat(api_url)
+    api_url = topbar()
+
+    t_demo, t_eval, t_about = st.tabs(["💬 Demo (React App)", "🧪 Eval (100Q)", "ℹ️ About"])
+
+    with t_demo:
+        tab_demo(api_url)
     with t_eval:
         tab_eval(api_url)
     with t_about:
