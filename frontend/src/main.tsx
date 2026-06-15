@@ -16,11 +16,19 @@ interface ChartSpec {
   chart_type: string;
   plotly_json: { data: unknown[]; layout: Record<string, unknown> };
 }
+interface AgentStep {
+  step: number;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  result_summary: string;
+  charts?: ChartSpec[];
+}
 interface Message {
   role: "user" | "assistant";
   content: string;
   charts?: ChartSpec[];
   queries?: string[];
+  agentSteps?: AgentStep[];
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -50,6 +58,33 @@ const api = {
     if (!r.ok) throw new Error((await r.json()).detail ?? "Chat failed");
     return r.json();
   },
+  async agentChat(session_id: string, question: string) {
+    const r = await fetch("/api/agent-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id, question }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail ?? "Agent chat failed");
+    return r.json();
+  },
+  async importUrl(url: string) {
+    const r = await fetch("/api/import-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail ?? "Import failed");
+    return r.json();
+  },
+  async importGSheet(url_or_id: string, sheet_name?: string) {
+    const r = await fetch("/api/import-gsheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url_or_id, sheet_name: sheet_name || undefined }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail ?? "Google Sheets import failed");
+    return r.json();
+  },
 };
 
 // ── Simple markdown renderer ──────────────────────────────────────────────────
@@ -69,6 +104,34 @@ function MdText({ text }: { text: string }) {
   );
 }
 
+// ── Agent Steps display ───────────────────────────────────────────────────────
+const TOOL_ICONS: Record<string, string> = {
+  analyze_data: "📊",
+  query_sql: "🔍",
+  get_profile: "🗂️",
+  generate_chart: "📈",
+};
+
+function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
+  if (!steps.length) return null;
+  return (
+    <details className="agent-steps">
+      <summary>🤖 Agent thực hiện {steps.length} bước</summary>
+      <div className="agent-steps-list">
+        {steps.map((s) => (
+          <div key={s.step} className="agent-step-item">
+            <span className="agent-step-icon">{TOOL_ICONS[s.tool_name] ?? "🔧"}</span>
+            <div className="agent-step-body">
+              <span className="agent-step-name">{s.tool_name}</span>
+              <span className="agent-step-summary">{s.result_summary.slice(0, 120)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   const [sessionId, setSessionId] = useState("");
@@ -83,10 +146,25 @@ function App() {
   const [allCharts, setAllCharts] = useState<ChartSpec[]>([]);
   const [reportId, setReportId] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [importTab, setImportTab] = useState<"file" | "sheets" | "url">("file");
+  const [importUrl, setImportUrl] = useState("");
+  const [importSheet, setImportSheet] = useState("");
+  const [importSheetName, setImportSheetName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  function applyUploadResponse(d: Record<string, unknown>) {
+    setSessionId(d.session_id as string);
+    setProfile(d.profile as Profile);
+    setPreviewCols((d.preview_columns as string[]) ?? []);
+    setPreviewRows((d.preview_rows as Record<string, string>[]) ?? []);
+    setSuggestions((d.suggested_queries as string[]) ?? []);
+    setMessages([]);
+    setAllCharts([]);
+    setTab("preview");
+  }
 
   async function handleFiles(files: FileList | File[]) {
     const arr = Array.from(files).filter((f) =>
@@ -95,15 +173,7 @@ function App() {
     if (!arr.length) return alert("Only CSV/XLSX/XLS files are supported.");
     setBusy(true);
     try {
-      const d = await api.upload(arr);
-      setSessionId(d.session_id);
-      setProfile(d.profile);
-      setPreviewCols(d.preview_columns ?? []);
-      setPreviewRows(d.preview_rows ?? []);
-      setSuggestions(d.suggested_queries ?? []);
-      setMessages([]);
-      setAllCharts([]);
-      setTab("preview");
+      applyUploadResponse(await api.upload(arr));
     } catch (e: unknown) {
       alert((e as Error).message);
     } finally {
@@ -111,25 +181,59 @@ function App() {
     }
   }
 
-  async function send(q: string, mode: "analyze" | "chat" = "analyze") {
+  async function handleImportUrl() {
+    if (!importUrl.trim()) return;
+    setBusy(true);
+    try {
+      applyUploadResponse(await api.importUrl(importUrl.trim()));
+      setImportUrl("");
+    } catch (e: unknown) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleImportGSheet() {
+    if (!importSheet.trim()) return;
+    setBusy(true);
+    try {
+      applyUploadResponse(await api.importGSheet(importSheet.trim(), importSheetName.trim() || undefined));
+      setImportSheet("");
+      setImportSheetName("");
+    } catch (e: unknown) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function send(q: string, mode: "analyze" | "chat" | "agent" = "analyze") {
     if (!q.trim() || !sessionId || busy) return;
     setMessages((m) => [...m, { role: "user", content: q }]);
     setQuestion("");
     setBusy(true);
     setTab("chat");
     try {
-      const d = mode === "analyze"
-        ? await api.analyze(sessionId, q)
-        : await api.chat(sessionId, q);
-      const charts: ChartSpec[] = d.charts ?? [];
+      let d: Record<string, unknown>;
+      if (mode === "agent") {
+        d = await api.agentChat(sessionId, q);
+      } else if (mode === "analyze") {
+        d = await api.analyze(sessionId, q);
+      } else {
+        d = await api.chat(sessionId, q);
+      }
+      const charts: ChartSpec[] = (d.charts as ChartSpec[]) ?? [];
+      const agentSteps: AgentStep[] = (d.agent_steps as AgentStep[]) ?? [];
       setMessages((m) => [...m, {
         role: "assistant",
-        content: d.answer ?? "",
+        content: (d.answer as string) ?? "",
         charts,
-        queries: d.executed_queries ?? [],
+        queries: (d.executed_queries as string[]) ?? [],
+        agentSteps: agentSteps.length > 0 ? agentSteps : undefined,
       }]);
       if (charts.length) { setAllCharts((c) => [...c, ...charts]); setTab("charts"); }
-      if (d.report_id) setReportId(d.report_id);
+      if (d.report_id) setReportId(d.report_id as string);
     } catch (e: unknown) {
       setMessages((m) => [...m, { role: "assistant", content: `❌ ${(e as Error).message}` }]);
     } finally {
@@ -166,17 +270,60 @@ function App() {
 
         <div className="divider" />
 
-        <div
-          className={`drop-zone${dragging ? " dragging" : ""}`}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
-          onClick={() => fileRef.current?.click()}
-        >
-          <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.xls"
-            style={{ display: "none" }} onChange={(e) => e.target.files && handleFiles(e.target.files)} />
-          <span className="drop-icon">📁</span>
-          <span>{busy && !profile ? "Uploading…" : "Drop CSV / XLSX or click"}</span>
+        <div className="import-panel">
+          <div className="import-tabs">
+            {(["file", "sheets", "url"] as const).map((t) => (
+              <button key={t} className={`import-tab${importTab === t ? " active" : ""}`}
+                onClick={() => setImportTab(t)}>
+                {t === "file" && "📁"}{t === "sheets" && "📊"}{t === "url" && "🔗"}
+              </button>
+            ))}
+          </div>
+
+          {importTab === "file" && (
+            <div
+              className={`drop-zone${dragging ? " dragging" : ""}`}
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
+              onClick={() => fileRef.current?.click()}
+            >
+              <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.xls"
+                style={{ display: "none" }} onChange={(e) => e.target.files && handleFiles(e.target.files)} />
+              <span className="drop-icon">📁</span>
+              <span>{busy && !profile ? "Uploading…" : "Drop CSV / XLSX or click"}</span>
+            </div>
+          )}
+
+          {importTab === "sheets" && (
+            <div className="import-form">
+              <input className="import-input" type="text" placeholder="Google Sheets URL hoặc Sheet ID"
+                value={importSheet} onChange={(e) => setImportSheet(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleImportGSheet()} />
+              <input className="import-input" type="text" placeholder="Tên sheet (để trống = sheet đầu tiên)"
+                value={importSheetName} onChange={(e) => setImportSheetName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleImportGSheet()} />
+              <button className="import-btn" disabled={!importSheet.trim() || busy}
+                onClick={handleImportGSheet}>
+                {busy ? "Đang tải…" : "Import từ Sheets"}
+              </button>
+              <div className="import-hint">Sheet phải được chia sẻ với email service account</div>
+            </div>
+          )}
+
+          {importTab === "url" && (
+            <div className="import-form">
+              <input className="import-input" type="text"
+                placeholder="Dán URL file CSV, XLSX hoặc Google Sheets…"
+                value={importUrl} onChange={(e) => setImportUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleImportUrl()} />
+              <button className="import-btn" disabled={!importUrl.trim() || busy}
+                onClick={handleImportUrl}>
+                {busy ? "Đang tải…" : "Import từ URL"}
+              </button>
+              <div className="import-hint">Hỗ trợ CSV public, Google Sheets, Dropbox shared links</div>
+            </div>
+          )}
         </div>
 
         {profile && (
@@ -251,6 +398,7 @@ function App() {
                 <div key={i} className={`msg ${msg.role}`}>
                   <div className="bubble">
                     {msg.role === "assistant" ? <MdText text={msg.content} /> : msg.content}
+                    {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
                     {msg.queries && msg.queries.length > 0 && (
                       <details className="plan-detail">
                         <summary>Plan</summary>
@@ -275,6 +423,9 @@ function App() {
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
               />
               <div className="input-btns">
+                <button className="btn-agent" disabled={!sessionId || !question.trim() || busy}
+                  title="ReAct Agent — tự chọn và gọi nhiều tools, hiển thị từng bước"
+                  onClick={() => send(question, "agent")}>🤖 Agent</button>
                 <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
                   onClick={() => send(question, "analyze")}>Analyze ↵</button>
                 <button className="btn-sec" disabled={!sessionId || !question.trim() || busy}

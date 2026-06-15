@@ -99,3 +99,28 @@ class MergeSheetsResponse(BaseModel):
     merged_rows: int
     merged_columns: int
     merged_sheet_name: str
+
+
+class ImportUrlRequest(BaseModel):
+    url: str
+
+
+class ImportGSheetRequest(BaseModel):
+    url_or_id: str
+    sheet_name: str | None = None
+
+
+class AgentStepSchema(BaseModel):
+    step: int
+    tool_name: str
+    arguments: dict[str, Any]
+    result_summary: str
+    charts: list[ChartSpec] = Field(default_factory=list)
+
+
+class AgentChatResponse(BaseModel):
+    session_id: str
+    answer: str
+    charts: list[ChartSpec] = Field(default_factory=list)
+    agent_steps: list[AgentStepSchema] = Field(default_factory=list)
+    executed_queries: list[str] = Field(default_factory=list)

@@ -13,6 +13,7 @@ class GroupedMetricIntent:
     dimension: str
     metric_label: str
     dimension_label: str
+    top_n: int | None = None
 
 
 METRIC_SYNONYMS = {
@@ -22,6 +23,7 @@ METRIC_SYNONYMS = {
 }
 
 DIMENSION_SYNONYMS = {
+    "product": ("product", "product_name", "sản phẩm", "san pham", "mặt hàng", "mat hang"),
     "region": ("region", "area", "zone", "vùng", "vung", "khu vực", "khu vuc", "miền", "mien"),
     "category": ("category", "segment", "product category", "nhóm", "nhom", "danh mục", "danh muc"),
     "country": ("country", "quốc gia", "quoc gia"),
@@ -34,9 +36,11 @@ def infer_grouped_metric_intent(question: str | None, df: pd.DataFrame) -> Group
         return None
 
     normalized = normalize_text(question)
-    if " theo " not in f" {normalized} " and not any(
-        token in normalized for token in ("by ", "theo từng", "theo tung")
-    ):
+    is_top_question = bool(re.search(r"\b(top|best|cao nhat|nhieu nhat|ban chay)\b", normalized))
+    has_grouping_signal = " theo " in f" {normalized} " or any(
+        token in normalized for token in ("by ", "theo tung", "xep hang", "ranking")
+    )
+    if not has_grouping_signal and not is_top_question:
         return None
 
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
@@ -56,6 +60,7 @@ def infer_grouped_metric_intent(question: str | None, df: pd.DataFrame) -> Group
         dimension=dimension,
         metric_label=_friendly_metric_label(metric),
         dimension_label=_friendly_dimension_label(dimension),
+        top_n=_extract_top_n(normalized),
     )
 
 
@@ -91,6 +96,10 @@ def _match_column(
     for canonical, synonyms in synonym_groups.items():
         if not any(normalize_text(synonym) in normalized_question for synonym in synonyms):
             continue
+        if canonical == "product":
+            for preferred in ("product_name", "product"):
+                if preferred in normalized_cols:
+                    return normalized_cols[preferred]
         for normalized_col, original_col in normalized_cols.items():
             if canonical in normalized_col or any(normalize_text(synonym) == normalized_col for synonym in synonyms):
                 return original_col
@@ -118,6 +127,8 @@ def _friendly_metric_label(column: str) -> str:
 
 def _friendly_dimension_label(column: str) -> str:
     normalized = normalize_text(column)
+    if "product" in normalized or "san pham" in normalized:
+        return "sản phẩm"
     if "region" in normalized:
         return "vùng"
     if "category" in normalized:
@@ -126,3 +137,9 @@ def _friendly_dimension_label(column: str) -> str:
         return "quốc gia"
     return column
 
+
+def _extract_top_n(normalized_question: str) -> int | None:
+    match = re.search(r"\btop\s+(\d{1,2})\b", normalized_question)
+    if not match:
+        return None
+    return max(1, min(int(match.group(1)), 20))

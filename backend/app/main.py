@@ -11,17 +11,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from backend.app.schemas import (
+    AgentChatResponse,
+    AgentStepSchema,
     AnalyzeRequest,
     AnalyzeResponse,
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    ImportGSheetRequest,
+    ImportUrlRequest,
     UploadResponse,
     GetSheetsResponse,
     MergeSheetsRequest,
     MergeSheetsResponse,
     SheetData,
 )
+from backend.app.services.agent_runner import run_agent
+from backend.app.services.workspace_connectors import fetch_from_url, fetch_from_gsheet
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.charts import generate_question_charts, generate_recommended_charts
 from backend.app.services.guardrails import describe_guardrails
@@ -75,6 +81,41 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", sessions=session_store.count())
 
 
+def _build_upload_response(uploads: list[tuple[str, bytes]]) -> UploadResponse:
+    """Shared pipeline cho upload local, URL import và Google Sheets import."""
+    session = session_store.create_multiple(uploads)
+    profile = build_profile(session.dataframe)
+    session.profile = profile
+    session_store.save(session)
+
+    sheet_names = list(session.sheets.keys()) if session.sheets else None
+    file_sheet_map: dict[str, list[str]] = {}
+    for sheet_key in sheet_names or []:
+        if "::" in sheet_key:
+            file_name, sheet_name = sheet_key.split("::", 1)
+        else:
+            file_name, sheet_name = sheet_key, sheet_key
+        file_sheet_map.setdefault(file_name, []).append(sheet_key)
+
+    preview_df = session.dataframe.head(10)
+    preview_columns = [str(c) for c in preview_df.columns]
+    preview_rows = preview_df.astype(str).where(preview_df.notna(), None).to_dict(orient="records")
+    suggested_queries = _generate_suggested_queries(session.dataframe, profile)
+
+    return UploadResponse(
+        session_id=session.session_id,
+        filename=session.filename,
+        filenames=session.file_names,
+        profile=profile,
+        sheet_names=sheet_names,
+        file_sheet_map=file_sheet_map if file_sheet_map else None,
+        sheets_context=session.sheets_context if sheet_names and len(sheet_names) > 1 else None,
+        preview_columns=preview_columns,
+        preview_rows=preview_rows,
+        suggested_queries=suggested_queries,
+    )
+
+
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload_dataset(files: list[UploadFile] = File(...)) -> UploadResponse:
     if not files:
@@ -93,36 +134,35 @@ async def upload_dataset(files: list[UploadFile] = File(...)) -> UploadResponse:
         uploads.append((file.filename, content))
 
     try:
-        session = session_store.create_multiple(uploads)
-        profile = build_profile(session.dataframe)
-        session.profile = profile
+        return _build_upload_response(uploads)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        sheet_names = list(session.sheets.keys()) if session.sheets else None
-        file_sheet_map: dict[str, list[str]] = {}
-        for sheet_key in sheet_names or []:
-            if "::" in sheet_key:
-                file_name, sheet_name = sheet_key.split("::", 1)
-            else:
-                file_name, sheet_name = sheet_key, sheet_key
-            file_sheet_map.setdefault(file_name, []).append(sheet_key)
 
-        preview_df = session.dataframe.head(10)
-        preview_columns = [str(c) for c in preview_df.columns]
-        preview_rows = preview_df.astype(str).where(preview_df.notna(), None).to_dict(orient="records")
-        suggested_queries = _generate_suggested_queries(session.dataframe, profile)
+@app.post("/api/import-url", response_model=UploadResponse)
+def import_from_url(req: ImportUrlRequest) -> UploadResponse:
+    try:
+        filename, content = fetch_from_url(req.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Không thể tải file: {exc}") from exc
+    try:
+        return _build_upload_response([(filename, content)])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return UploadResponse(
-            session_id=session.session_id,
-            filename=session.filename,
-            filenames=session.file_names,
-            profile=profile,
-            sheet_names=sheet_names,
-            file_sheet_map=file_sheet_map if file_sheet_map else None,
-            sheets_context=session.sheets_context if sheet_names and len(sheet_names) > 1 else None,
-            preview_columns=preview_columns,
-            preview_rows=preview_rows,
-            suggested_queries=suggested_queries,
-        )
+
+@app.post("/api/import-gsheet", response_model=UploadResponse)
+def import_from_gsheet(req: ImportGSheetRequest) -> UploadResponse:
+    try:
+        filename, content = fetch_from_gsheet(req.url_or_id, req.sheet_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Google Sheets error: {exc}") from exc
+    try:
+        return _build_upload_response([(filename, content)])
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -139,7 +179,7 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
     executed_queries: list[str] = []
     try:
         if req.question:
-            planned = run_planned_analysis(session.dataframe, req.question, profile)
+            planned = run_planned_analysis(session.dataframe, req.question, profile, history=session.history[-6:])
             answer = planned.answer
             charts = planned.charts or generate_recommended_charts(session.dataframe)
             executed_queries = planned.executed_queries
@@ -158,6 +198,7 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
     report_id, _ = write_markdown_report(answer, profile, charts)
     session.report_id = report_id
     session.history.append({"role": "assistant", "content": answer})
+    session_store.save(session)
 
     return AnalyzeResponse(
         session_id=session.session_id,
@@ -223,7 +264,7 @@ def chat_with_dataset(req: ChatRequest) -> ChatResponse:
     try:
         profile = session.profile or build_profile(session.dataframe)
         session.profile = profile
-        planned = run_planned_analysis(session.dataframe, req.question, profile)
+        planned = run_planned_analysis(session.dataframe, req.question, profile, history=session.history[-6:])
         answer = planned.answer
         executed_queries = planned.executed_queries
     except Exception as exc:
@@ -237,6 +278,7 @@ def chat_with_dataset(req: ChatRequest) -> ChatResponse:
 
     session.history.append({"role": "user", "content": req.question})
     session.history.append({"role": "assistant", "content": answer})
+    session_store.save(session)
     return ChatResponse(session_id=req.session_id, answer=answer, executed_queries=executed_queries)
 
 
@@ -394,6 +436,46 @@ def download_report(report_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report not found.")
     return FileResponse(path, media_type="text/markdown", filename=f"report-{report_id}.md")
+
+
+@app.post("/api/agent-chat", response_model=AgentChatResponse)
+def agent_chat(req: ChatRequest) -> AgentChatResponse:
+    try:
+        session = session_store.get(req.session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    profile = session.profile or build_profile(session.dataframe)
+    session.profile = profile
+
+    try:
+        result = run_agent(session.dataframe, req.question, profile, history=session.history[-6:])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session.history.append({"role": "user", "content": req.question})
+    session.history.append({"role": "assistant", "content": result.answer})
+    session_store.save(session)
+
+    agent_steps = [
+        AgentStepSchema(
+            step=s.step,
+            tool_name=s.tool_name,
+            arguments=s.arguments,
+            result_summary=s.result_summary,
+            charts=s.charts,
+        )
+        for s in result.agent_steps
+    ]
+    executed_queries = [f"{s.tool_name}({s.arguments})" for s in result.agent_steps]
+
+    return AgentChatResponse(
+        session_id=req.session_id,
+        answer=result.answer,
+        charts=result.charts,
+        agent_steps=agent_steps,
+        executed_queries=executed_queries,
+    )
 
 
 # ── SPA catch-all — MUST be last, after all /api/* routes ────────────────────

@@ -18,7 +18,7 @@ def generate_question_charts(df: pd.DataFrame, question: str | None) -> list[dic
     if not intent:
         return []
 
-    grouped = build_grouped_metric_frame(df, intent).head(12)
+    grouped = build_grouped_metric_frame(df, intent).head(intent.top_n or 12)
     title = f"{intent.metric_label.capitalize()} theo {intent.dimension_label}"
     fig = px.bar(
         grouped,

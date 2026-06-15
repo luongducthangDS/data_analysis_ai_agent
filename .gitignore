@@ -26,6 +26,8 @@ frontend/dist/
 # Runtime data
 data/uploads/
 data/reports/
+data/*.db
+test_write
 
 # Logs and local files
 *.log

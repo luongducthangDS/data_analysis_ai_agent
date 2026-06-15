@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 import requests
@@ -47,6 +48,36 @@ Nguyên tắc:
         system = """Bạn là trợ lý phân tích dữ liệu cho CEO.
 Trả lời câu hỏi dựa trên context đã tính sẵn. Không bịa số liệu."""
         return self.generate(f"{system}\n\nContext:\n{context}\n\nCâu hỏi: {question}\n\nTrả lời:", max_tokens, 0.25)
+
+    def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        max_tokens: int = 1000,
+        temperature: float = 0.0,
+    ) -> dict:
+        from groq import Groq
+        kwargs: dict = dict(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        resp = Groq(api_key=self.api_key).chat.completions.create(**kwargs)
+        msg = resp.choices[0].message
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            return {
+                "type": "tool_call",
+                "id": tc.id,
+                "name": tc.function.name,
+                "arguments": json.loads(tc.function.arguments),
+                "raw_message": msg,
+            }
+        return {"type": "text", "content": (msg.content or "").strip()}
 
 
 # ---------------------------------------------------------------------------

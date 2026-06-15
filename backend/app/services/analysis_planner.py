@@ -35,11 +35,16 @@ ALLOWED_DERIVED_OPS = {
 ALLOWED_FILTER_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "contains"}
 
 
-def run_planned_analysis(df: pd.DataFrame, question: str | None, profile: dict[str, Any]) -> PlannerResult:
+def run_planned_analysis(
+    df: pd.DataFrame,
+    question: str | None,
+    profile: dict[str, Any],
+    history: list[dict[str, str]] | None = None,
+) -> PlannerResult:
     if not question:
         raise ValueError("Planner needs a user question.")
 
-    plan = _build_plan_with_llm(df, question, profile)
+    plan = _build_plan_with_llm(df, question, profile, history)
     result = execute_plan(df, plan)
     answer = _synthesize_answer(question, result, plan, source_df=df)
     charts = _build_charts_from_result(result, plan)
@@ -353,10 +358,15 @@ def _detect_value_filter(normalized_question: str, df: pd.DataFrame) -> tuple[st
     return None
 
 
-def _build_plan_with_llm(df: pd.DataFrame, question: str, profile: dict[str, Any]) -> dict[str, Any]:
+def _build_plan_with_llm(
+    df: pd.DataFrame,
+    question: str,
+    profile: dict[str, Any],
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     try:
         client = get_llm_client()
-        prompt = _build_planner_prompt(df, question, profile)
+        prompt = _build_planner_prompt(df, question, profile, history)
         raw = client.generate(prompt, max_tokens=900, temperature=0.0, top_p=0.9)
         plan = _extract_json_object(raw)
         plan = _repair_plan_for_question(plan, question)
@@ -369,7 +379,12 @@ def _build_plan_with_llm(df: pd.DataFrame, question: str, profile: dict[str, Any
         return fallback
 
 
-def _build_planner_prompt(df: pd.DataFrame, question: str, profile: dict[str, Any]) -> str:
+def _build_planner_prompt(
+    df: pd.DataFrame,
+    question: str,
+    profile: dict[str, Any],
+    history: list[dict[str, str]] | None = None,
+) -> str:
     schema_lines = []
     for col, dtype in profile["column_types"].items():
         examples = df[col].dropna().astype(str).head(5).tolist()
@@ -427,7 +442,9 @@ Q: "so sánh approved vs rejected"
 Q: "expense theo category và status"
 {{"action":"aggregate","group_by":["Category","Status"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount"}}],"sort":[{{"column":"Tổng Amount","direction":"desc"}}],"limit":30}}
 
-CÂU HỎI CẦN PHÂN TÍCH:
+LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
+
+CÂU HỎI HIỆN TẠI:
 {question}""".strip()
 
 
@@ -901,6 +918,21 @@ def _mentioned_quarters(normalized_question: str) -> set[int]:
     quarters = {int(match) for match in re.findall(r"\bq([1-4])\b", normalized_question)}
     quarters.update(int(match) for match in re.findall(r"\bquy\s*([1-4])\b", normalized_question))
     return quarters
+
+
+def _format_history(history: list[dict[str, str]] | None) -> str:
+    if not history:
+        return " (không có)"
+    recent = history[-6:]
+    lines = []
+    for turn in recent:
+        role = turn.get("role", "")
+        content = str(turn.get("content", ""))[:300]
+        if role == "user":
+            lines.append(f"User: {content}")
+        elif role == "assistant":
+            lines.append(f"Assistant: {content}")
+    return "\n" + "\n".join(lines) if lines else " (không có)"
 
 
 def _normalize(text: Any) -> str:
