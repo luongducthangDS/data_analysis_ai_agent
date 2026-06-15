@@ -231,6 +231,8 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
         executed_queries = [f"fallback_analysis: {exc}"] if req.question else []
     report_id, _ = write_markdown_report(answer, profile, charts)
     session.report_id = report_id
+    if req.question:
+        session.history.append({"role": "user", "content": req.question})
     session.history.append({"role": "assistant", "content": answer})
     session_store.save(session)
 

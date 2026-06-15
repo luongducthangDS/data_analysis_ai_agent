@@ -9,6 +9,11 @@ Classifies user questions into:
 from __future__ import annotations
 
 _BOT_INFO: list[str] = [
+    # greetings → respond as bot introduction
+    "chào bạn", "xin chào", "chào em", "chào anh", "chào chị",
+    "chào buổi sáng", "chào buổi tối", "kính chào",
+    "hello", "hi there", "hey there", "good morning", "good afternoon", "good evening",
+    # identity
     "bạn là ai", "bạn tên gì", "bạn là gì",
     "bạn làm được gì", "bạn có thể làm gì", "bạn hỗ trợ gì",
     "tính năng của bạn", "bạn có tính năng gì",
@@ -20,6 +25,9 @@ _BOT_INFO: list[str] = [
     "xây dựng bởi", "developed by", "built by",
     "bạn là chatbot", "bạn là ai vậy", "em là ai",
 ]
+
+# Short standalone greetings (≤3 words) that contain these tokens
+_GREETING_TOKENS: list[str] = ["chào", "hello", "hi", "hey", "alo"]
 
 _OFF_TOPIC: list[str] = [
     "thời tiết", "weather", "nhiệt độ hôm nay", "dự báo thời tiết",
@@ -68,6 +76,10 @@ def classify_query(question: str) -> str:
     Rule-based, O(n) keyword scan.
     """
     norm = question.lower().strip()
+    # Short greeting messages (≤4 words) — catch "chào", "hello", "hi", "hey"
+    words = norm.split()
+    if len(words) <= 4 and any(tok == words[0] or norm.startswith(tok) for tok in _GREETING_TOKENS):
+        return "bot_info"
     if any(p in norm for p in _BOT_INFO):
         return "bot_info"
     if any(p in norm for p in _OFF_TOPIC):
