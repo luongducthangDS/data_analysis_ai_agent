@@ -22,3 +22,7 @@ google-auth==2.29.0
 # Database
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
+
+# Testing
+pytest==8.2.2
+pytest-mock==3.14.0
