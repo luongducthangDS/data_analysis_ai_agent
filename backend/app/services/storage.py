@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 import re
@@ -9,6 +10,7 @@ import re
 import pandas as pd
 
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer, SheetRelationship
+from backend.app.database import init_db, db_session, SessionModel, ChatHistoryModel
 
 
 # DATA_DIR env var lets Railway mount a persistent volume at a custom path.
@@ -29,9 +31,9 @@ class DatasetSession:
     report_id: str | None = None
     history: list[dict[str, str]] = field(default_factory=list)
     file_names: list[str] = field(default_factory=list)
-    sheets: dict[str, pd.DataFrame] = field(default_factory=dict)  # All sheets for Excel files and CSV files
+    sheets: dict[str, pd.DataFrame] = field(default_factory=dict)
     sheet_relationships: list[SheetRelationship] = field(default_factory=list)
-    sheets_context: str = ""  # Text description of sheet structure
+    sheets_context: str = ""
 
 
 class SessionStore:
@@ -39,6 +41,7 @@ class SessionStore:
         self._sessions: dict[str, DatasetSession] = {}
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        init_db()
 
     def create(self, filename: str, content: bytes) -> DatasetSession:
         return self.create_multiple([(filename, content)])
@@ -103,16 +106,125 @@ class SessionStore:
             sheets_context=context,
         )
         self._sessions[session_id] = session
+        self._insert_session(session)
         return session
 
     def get(self, session_id: str) -> DatasetSession:
-        try:
+        if session_id in self._sessions:
             return self._sessions[session_id]
-        except KeyError as exc:
-            raise KeyError(f"Unknown session_id: {session_id}") from exc
+        return self._restore_from_db(session_id)
+
+    def save(self, session: DatasetSession) -> None:
+        """Persist profile, report_id, and history to DB. Call after any mutation."""
+        self._sessions[session.session_id] = session
+        try:
+            with db_session() as db:
+                row = db.get(SessionModel, session.session_id)
+                if row is None:
+                    return
+                row.profile = session.profile
+                row.report_id = session.report_id
+                row.updated_at = datetime.utcnow()
+                db.query(ChatHistoryModel).filter_by(session_id=session.session_id).delete()
+                for turn in session.history:
+                    db.add(ChatHistoryModel(
+                        session_id=session.session_id,
+                        role=turn.get("role", ""),
+                        content=turn.get("content", ""),
+                    ))
+        except Exception:
+            pass  # Don't crash the API if DB is temporarily unavailable
 
     def count(self) -> int:
-        return len(self._sessions)
+        try:
+            with db_session() as db:
+                return db.query(SessionModel).count()
+        except Exception:
+            return len(self._sessions)
+
+    # ── Private ──────────────────────────────────────────────────────────────
+
+    def _insert_session(self, session: DatasetSession) -> None:
+        try:
+            with db_session() as db:
+                db.add(SessionModel(
+                    session_id=session.session_id,
+                    filename=session.filename,
+                    file_names=session.file_names,
+                    profile=session.profile,
+                    report_id=session.report_id,
+                    sheet_relationships=self._serialize_relationships(session.sheet_relationships),
+                    sheets_context=session.sheets_context,
+                ))
+        except Exception:
+            pass
+
+    def _restore_from_db(self, session_id: str) -> DatasetSession:
+        """Load a session from DB and reload its DataFrames from disk."""
+        with db_session() as db:
+            row = db.get(SessionModel, session_id)
+            if row is None:
+                raise KeyError(f"Unknown session_id: {session_id}")
+
+            file_names: list[str] = row.file_names or []
+            all_sheets: dict[str, pd.DataFrame] = {}
+
+            for file_name in file_names:
+                safe_name = Path(file_name).name.replace(" ", "_")
+                file_path = UPLOAD_DIR / f"{session_id}_{safe_name}"
+                if not file_path.exists():
+                    raise KeyError(f"Session file missing from disk: {file_path}")
+
+                suffix = file_path.suffix.lower()
+                if suffix == ".csv":
+                    df = self._coerce_datetime_columns(pd.read_csv(file_path))
+                    all_sheets[Path(file_name).stem] = df
+                elif suffix in {".xlsx", ".xls"}:
+                    for sheet_name, df in MultiSheetAnalyzer.read_all_sheets(str(file_path)).items():
+                        all_sheets[f"{Path(file_name).stem}::{sheet_name}"] = self._coerce_datetime_columns(df)
+
+            if not all_sheets:
+                raise KeyError(f"No files could be loaded for session: {session_id}")
+
+            analysis_df = self._build_analysis_dataframe(all_sheets)
+            history = [{"role": h.role, "content": h.content} for h in row.history]
+            file_path_first = (
+                UPLOAD_DIR / f"{session_id}_{Path(file_names[0]).name.replace(' ', '_')}"
+                if file_names else None
+            )
+
+            session = DatasetSession(
+                session_id=session_id,
+                filename=row.filename,
+                file_path=file_path_first,
+                dataframe=analysis_df,
+                profile=row.profile or {},
+                report_id=row.report_id,
+                history=history,
+                file_names=file_names,
+                sheets=all_sheets,
+                sheet_relationships=self._deserialize_relationships(row.sheet_relationships),
+                sheets_context=row.sheets_context or "",
+            )
+            self._sessions[session_id] = session
+            return session
+
+    @staticmethod
+    def _serialize_relationships(rels: list[SheetRelationship]) -> list[dict]:
+        return [
+            {
+                "sheet1": r.sheet1,
+                "sheet2": r.sheet2,
+                "join_key": r.join_key,
+                "relationship_type": r.relationship_type,
+                "similarity_score": r.similarity_score,
+            }
+            for r in rels
+        ]
+
+    @staticmethod
+    def _deserialize_relationships(data: list[dict] | None) -> list[SheetRelationship]:
+        return [SheetRelationship(**d) for d in (data or [])]
 
     @staticmethod
     def _build_analysis_dataframe(sheets: dict[str, pd.DataFrame]) -> pd.DataFrame:
