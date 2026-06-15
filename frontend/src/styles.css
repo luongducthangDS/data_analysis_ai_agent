@@ -273,7 +273,7 @@ tr:hover td { background: rgba(255,255,255,.03); }
   line-height: 1.6;
 }
 .msg.user .bubble { background: var(--accent); color: white; border-bottom-right-radius: 4px; }
-.msg.assistant .bubble { background: var(--surface2); color: var(--text1); border-bottom-left-radius: 4px; }
+.msg.assistant .bubble { background: var(--surface2); color: var(--text1); border-bottom-left-radius: 4px; max-width: 88%; }
 
 /* typing indicator */
 .typing { display: flex; align-items: center; gap: 4px; padding: 14px 18px; }
@@ -401,7 +401,20 @@ tr:hover td { background: rgba(255,255,255,.03); }
 .agent-step-name { color: #c4b5fd; font-weight: 600; }
 .agent-step-summary { color: var(--text2); line-height: 1.4; }
 
-/* ── Charts ── */
+/* ── Inline charts inside chat messages ── */
+.assistant-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.msg-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 10px;
+}
+
+/* ── Charts gallery tab ── */
 .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; }
 .chart-card {
   background: var(--surface);

@@ -232,7 +232,7 @@ function App() {
         queries: (d.executed_queries as string[]) ?? [],
         agentSteps: agentSteps.length > 0 ? agentSteps : undefined,
       }]);
-      if (charts.length) { setAllCharts((c) => [...c, ...charts]); setTab("charts"); }
+      if (charts.length) setAllCharts((c) => [...c, ...charts]);
       if (d.report_id) setReportId(d.report_id as string);
     } catch (e: unknown) {
       setMessages((m) => [...m, { role: "assistant", content: `❌ ${(e as Error).message}` }]);
@@ -396,16 +396,37 @@ function App() {
               )}
               {messages.map((msg, i) => (
                 <div key={i} className={`msg ${msg.role}`}>
-                  <div className="bubble">
-                    {msg.role === "assistant" ? <MdText text={msg.content} /> : msg.content}
-                    {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
-                    {msg.queries && msg.queries.length > 0 && (
-                      <details className="plan-detail">
-                        <summary>Plan</summary>
-                        <pre>{msg.queries.join("\n")}</pre>
-                      </details>
-                    )}
-                  </div>
+                  {msg.role === "user" ? (
+                    <div className="bubble">{msg.content}</div>
+                  ) : (
+                    <div className="assistant-msg">
+                      <div className="bubble">
+                        <MdText text={msg.content} />
+                        {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
+                        {msg.queries && msg.queries.length > 0 && (
+                          <details className="plan-detail">
+                            <summary>Plan</summary>
+                            <pre>{msg.queries.join("\n")}</pre>
+                          </details>
+                        )}
+                      </div>
+                      {msg.charts && msg.charts.length > 0 && (
+                        <div className="msg-charts">
+                          {msg.charts.map((c) => (
+                            <div key={c.chart_id} className="chart-card">
+                              <div className="chart-title">{c.title}</div>
+                              <Plot
+                                data={c.plotly_json.data as never}
+                                layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 48 } }}
+                                useResizeHandler style={{ width: "100%", height: "280px" }}
+                                config={{ displayModeBar: false }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               {busy && (
@@ -417,19 +438,21 @@ function App() {
             </div>
             <div className="input-bar">
               <textarea rows={2}
-                placeholder={sessionId ? "Hỏi về dataset của bạn… (Enter to send)" : "Upload dataset trước"}
+                placeholder={sessionId ? "Hỏi về dataset… Enter gửi, Shift+Enter xuống dòng" : "Upload dataset trước để bắt đầu"}
                 value={question} disabled={!sessionId || busy}
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
               />
               <div className="input-btns">
-                <button className="btn-agent" disabled={!sessionId || !question.trim() || busy}
-                  title="ReAct Agent — tự chọn và gọi nhiều tools, hiển thị từng bước"
-                  onClick={() => send(question, "agent")}>🤖 Agent</button>
                 <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
-                  onClick={() => send(question, "analyze")}>Analyze ↵</button>
+                  title="Phân tích sâu — tạo kế hoạch, chạy SQL, sinh biểu đồ"
+                  onClick={() => send(question, "analyze")}>📊 Phân tích</button>
+                <button className="btn-agent" disabled={!sessionId || !question.trim() || busy}
+                  title="ReAct Agent — tự chọn nhiều tools, suy luận từng bước"
+                  onClick={() => send(question, "agent")}>🤖 Agent</button>
                 <button className="btn-sec" disabled={!sessionId || !question.trim() || busy}
-                  onClick={() => send(question, "chat")}>Quick query</button>
+                  title="Truy vấn nhanh bằng SQL — không sinh biểu đồ"
+                  onClick={() => send(question, "chat")}>⚡ SQL</button>
               </div>
             </div>
           </div>
