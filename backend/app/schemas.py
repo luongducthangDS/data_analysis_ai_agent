@@ -62,7 +62,9 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     session_id: str
     answer: str
+    charts: list[ChartSpec] = Field(default_factory=list)
     executed_queries: list[str] = Field(default_factory=list)
+    query_type: str = "data_query"  # "data_query" | "bot_info" | "off_topic"
 
 
 class HealthResponse(BaseModel):

@@ -28,6 +28,9 @@ from backend.app.schemas import (
 )
 from backend.app.services.agent_runner import run_agent
 from backend.app.services.llm_service import get_active_provider
+from backend.app.services.query_classifier import (
+    classify_query, BOT_INFO_RESPONSE, OFF_TOPIC_RESPONSE
+)
 from backend.app.services.workspace_connectors import fetch_from_url, fetch_from_gsheet
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.charts import generate_question_charts, generate_recommended_charts
@@ -179,6 +182,32 @@ def analyze_dataset(req: AnalyzeRequest) -> AnalyzeResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    # Handle bot_info / off_topic questions before running analysis
+    if req.question:
+        query_type = classify_query(req.question)
+        if query_type == "bot_info":
+            session.history.append({"role": "user", "content": req.question})
+            session.history.append({"role": "assistant", "content": BOT_INFO_RESPONSE})
+            session_store.save(session)
+            profile = session.profile or build_profile(session.dataframe)
+            report_id, _ = write_markdown_report(BOT_INFO_RESPONSE, profile, [])
+            return AnalyzeResponse(
+                session_id=session.session_id, answer=BOT_INFO_RESPONSE,
+                profile=profile, charts=[], report_id=report_id,
+                executed_queries=["[bot_info]"], guardrails=[],
+            )
+        if query_type == "off_topic":
+            session.history.append({"role": "user", "content": req.question})
+            session.history.append({"role": "assistant", "content": OFF_TOPIC_RESPONSE})
+            session_store.save(session)
+            profile = session.profile or build_profile(session.dataframe)
+            report_id, _ = write_markdown_report(OFF_TOPIC_RESPONSE, profile, [])
+            return AnalyzeResponse(
+                session_id=session.session_id, answer=OFF_TOPIC_RESPONSE,
+                profile=profile, charts=[], report_id=report_id,
+                executed_queries=["[off_topic]"], guardrails=[],
+            )
+
     profile = session.profile or build_profile(session.dataframe)
     session.profile = profile
     executed_queries: list[str] = []
@@ -266,11 +295,35 @@ def chat_with_dataset(req: ChatRequest) -> ChatResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    # Classify intent first — bot_info and off_topic bypass data analysis
+    query_type = classify_query(req.question)
+
+    if query_type == "bot_info":
+        session.history.append({"role": "user", "content": req.question})
+        session.history.append({"role": "assistant", "content": BOT_INFO_RESPONSE})
+        session_store.save(session)
+        return ChatResponse(
+            session_id=req.session_id, answer=BOT_INFO_RESPONSE,
+            charts=[], executed_queries=["[bot_info]"], query_type="bot_info",
+        )
+
+    if query_type == "off_topic":
+        session.history.append({"role": "user", "content": req.question})
+        session.history.append({"role": "assistant", "content": OFF_TOPIC_RESPONSE})
+        session_store.save(session)
+        return ChatResponse(
+            session_id=req.session_id, answer=OFF_TOPIC_RESPONSE,
+            charts=[], executed_queries=["[off_topic]"], query_type="off_topic",
+        )
+
+    # data_query — run planner → SQL fallback
+    charts: list = []
     try:
         profile = session.profile or build_profile(session.dataframe)
         session.profile = profile
         planned = run_planned_analysis(session.dataframe, req.question, profile, history=session.history[-6:])
         answer = planned.answer
+        charts = planned.charts or []
         executed_queries = planned.executed_queries
     except Exception as exc:
         try:
@@ -284,7 +337,10 @@ def chat_with_dataset(req: ChatRequest) -> ChatResponse:
     session.history.append({"role": "user", "content": req.question})
     session.history.append({"role": "assistant", "content": answer})
     session_store.save(session)
-    return ChatResponse(session_id=req.session_id, answer=answer, executed_queries=executed_queries)
+    return ChatResponse(
+        session_id=req.session_id, answer=answer,
+        charts=charts, executed_queries=executed_queries, query_type="data_query",
+    )
 
 
 def _format_chat_answer(question: str, df, rows: list[dict]) -> str:
