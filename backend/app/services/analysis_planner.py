@@ -712,7 +712,31 @@ def _build_charts_from_result(result: pd.DataFrame, plan: dict[str, Any]) -> lis
 
 
 def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
-    return _deterministic_answer(question, result, plan, source_df=source_df)
+    data_summary = _deterministic_answer(question, result, plan, source_df=source_df)
+    if result.empty:
+        return data_summary
+    try:
+        client = get_llm_client()
+        rows_text = result.head(15).to_string(index=False, max_colwidth=50)
+        currency_note = _build_currency_warning(source_df, plan) or ""
+        prompt = f"""Bạn là chuyên gia phân tích dữ liệu. Người dùng hỏi: "{question}"
+
+Kết quả phân tích:
+{rows_text}
+{f"LƯU Ý: {currency_note}" if currency_note else ""}
+
+Viết câu trả lời ngắn gọn bằng tiếng Việt (4-7 câu):
+- Nêu con số / kết quả quan trọng nhất đầu tiên
+- Chỉ ra insight hoặc pattern nổi bật (nếu có)
+- Kết luận thực tế có thể hành động được
+
+Chỉ trả lời văn xuôi tự nhiên. Không dùng code block, không lặp lại câu hỏi."""
+        answer = client.generate(prompt, max_tokens=400, temperature=0.3)
+        if len(answer.strip()) >= 40:
+            return answer.strip()
+    except Exception:
+        pass
+    return data_summary
 
 
 def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
