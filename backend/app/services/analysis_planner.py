@@ -25,7 +25,7 @@ class PlannerResult:
     plan: dict[str, Any] = field(default_factory=dict)
 
 
-ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile"}
+ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution"}
 ALLOWED_AGGREGATIONS = {"sum", "mean", "median", "min", "max", "count", "nunique"}
 ALLOWED_DERIVED_OPS = {
     "multiply",
@@ -74,6 +74,8 @@ def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
         return _execute_compare_metrics(work, plan)
     if action == "time_series":
         return _execute_time_series(work, plan)
+    if action == "distribution":
+        return _execute_distribution(work, plan)
     raise ValueError(f"Unsupported action: {action}")
 
 
@@ -99,6 +101,20 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
     top_n = _extract_top_n(normalized) or 10
     asc = any(kw in normalized for kw in ("nho nhat", "thap nhat", "it nhat", "lowest", "smallest", "bottom"))
     sort_dir = "asc" if asc else "desc"
+
+    # ── 0a. Distribution: "phân phối / phân bố / histogram" ───────────────────
+    if metric and any(kw in normalized for kw in ("phan phoi", "phan bo", "distribution", "histogram")):
+        return {"action": "distribution", "column": metric, "bins": 10}
+
+    # ── 0b. Range / spread: "range / khoảng giá trị / min max / biên độ" ──────
+    if metric and any(kw in normalized for kw in ("range", "khoang gia tri", "bien do", "spread", "min max", "min-max")):
+        return {
+            "action": "compare_metrics",
+            "metrics": [
+                {"column": metric, "aggregation": "min", "label": "Thấp nhất"},
+                {"column": metric, "aggregation": "max", "label": "Cao nhất"},
+            ],
+        }
 
     # ── 1. Time series: "theo tháng / quý / năm" ──────────────────────────────
     if datetime_cols:
@@ -505,6 +521,8 @@ QUY TẮC TUYỆT ĐỐI:
 10. Từ "lớn nhất", "top N", "cao nhất" → sort desc, limit = N (mặc định 10)
 11. Từ "nhỏ nhất", "thấp nhất", "bottom N" → sort asc, limit = N
 12. Câu hỏi chứa "ai", "học sinh nào", "người nào", "nhân viên nào", "khách hàng nào" → PHẢI có group_by trên cột tên/entity + aggregation max/min + sort + limit:1
+13. Hỏi "phân phối", "phân bố", "distribution", "histogram" của 1 cột số → action "distribution" với field "column" (tên cột số) và "bins" (mặc định 10)
+14. Hỏi "range", "khoảng giá trị", "min max", "biên độ", "spread" của 1 cột số → action "compare_metrics" với 2 metric: min và max của cùng cột đó
 {currency_note}
 SCHEMA DATASET:
 {chr(10).join(schema_lines)}
@@ -543,6 +561,12 @@ Q: "số lượng học sinh có điểm dưới 5" / "đếm số bản ghi th�
 
 Q: "danh sách học sinh điểm cộng lần 2 dưới 5" / "liệt kê người nào có X < threshold"
 {{"action":"aggregate","filters":[{{"column":"<score_col>","operator":"lt","value":5}}],"group_by":["<tên_entity_col>"],"metrics":[{{"column":"<score_col>","aggregation":"max","label":"Điểm"}}],"sort":[{{"column":"Điểm","direction":"asc"}}],"limit":50}}
+
+Q: "phân phối điểm" / "phân bố lương" / "histogram doanh thu"
+{{"action":"distribution","column":"<numeric_col>","bins":10}}
+
+Q: "range điểm" / "khoảng giá trị lương" / "biên độ giá"
+{{"action":"compare_metrics","metrics":[{{"column":"<numeric_col>","aggregation":"min","label":"Thấp nhất"}},{{"column":"<numeric_col>","aggregation":"max","label":"Cao nhất"}}]}}
 
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
 {_format_ecommerce_context(ecommerce_col_map)}
@@ -621,6 +645,8 @@ def _repair_column_names(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, An
         repaired["group_by"] = [_resolve(c) for c in repaired["group_by"]]
     if isinstance(repaired.get("time_column"), str):
         repaired["time_column"] = _resolve(repaired["time_column"])
+    if isinstance(repaired.get("column"), str):  # distribution action
+        repaired["column"] = _resolve(repaired["column"])
     for item in repaired.get("filters") or []:
         if isinstance(item.get("column"), str):
             item["column"] = _resolve(item["column"])
@@ -694,6 +720,8 @@ def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> 
         _require_column(known, col)
     if plan.get("time_column"):
         _require_column(known, plan["time_column"])
+    if plan.get("action") == "distribution":
+        _require_column(known, plan.get("column"))
     for metric in plan.get("metrics", []) or []:
         _require_column(known, metric.get("column"))
         if metric.get("aggregation", "sum") not in ALLOWED_AGGREGATIONS:
@@ -851,6 +879,60 @@ def _execute_time_series(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame
     return result.rename(columns={"_period": grain})
 
 
+def _execute_distribution(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
+    """
+    Histogram of a numeric column → DataFrame [khoang_gia_tri (bin label), so_luong (count)].
+    Bins are ordered ascending so the result reads like a histogram.
+    """
+    column = plan.get("column")
+    if not column:
+        raise ValueError("distribution needs a column.")
+    series = pd.to_numeric(df[column], errors="coerce").dropna()
+    if series.empty:
+        raise ValueError(f"Column '{column}' has no numeric values for distribution.")
+
+    n_bins = min(int(plan.get("bins", 10) or 10), 50)
+    # If few distinct values, don't over-bin.
+    n_unique = series.nunique()
+    if n_unique <= 1:
+        return pd.DataFrame([{"khoang_gia_tri": f"{series.iloc[0]:g}", "so_luong": int(len(series))}])
+    n_bins = max(2, min(n_bins, n_unique))
+
+    binned = pd.cut(series, bins=n_bins)
+    counts = binned.value_counts(sort=False)
+    rows = [
+        {"khoang_gia_tri": f"{interval.left:.1f}–{interval.right:.1f}", "so_luong": int(count)}
+        for interval, count in counts.items()
+    ]
+    return pd.DataFrame(rows)
+
+
+def _describe_numeric(df: pd.DataFrame, column: str) -> dict[str, float | int | None]:
+    """Descriptive stats for a numeric column — used to answer distribution/range questions."""
+    if column not in df.columns:
+        return {}
+    series = pd.to_numeric(df[column], errors="coerce").dropna()
+    if series.empty:
+        return {}
+    return {
+        "count": int(series.count()),
+        "min": _round(float(series.min())),
+        "max": _round(float(series.max())),
+        "range": _round(float(series.max() - series.min())),
+        "mean": _round(float(series.mean())),
+        "median": _round(float(series.median())),
+        "std": _round(float(series.std())) if len(series) > 1 else None,
+        "q1": _round(float(series.quantile(0.25))),
+        "q3": _round(float(series.quantile(0.75))),
+    }
+
+
+def _round(value: float | None) -> float | None:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    return round(value, 2)
+
+
 def _profile_frame(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -882,15 +964,36 @@ def _sort_and_limit(result: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
 
 
 def _build_charts_from_result(result: pd.DataFrame, plan: dict[str, Any]) -> list[dict[str, Any]]:
-    if result.empty or len(result.columns) < 2:
+    action = plan.get("action")
+    if result is None or result.empty:
         return []
+
+    # Profile = metadata table, never charted.
+    if action == "profile":
+        return []
+
+    # Distribution → histogram (bar over ordered bins).
+    if action == "distribution":
+        x = result.columns[0]
+        y = result.columns[-1]
+        col_name = plan.get("column", "")
+        title = f"Phân phối {col_name}".strip()
+        fig = px.bar(result, x=x, y=y, title=title)
+        fig.update_layout(bargap=0.02)  # adjacent bars → histogram look
+        return [_chart("histogram", title, fig, x=str(x), y=str(y))]
+
+    # Meaningfulness gate: a single value / single row produces a 1-bar chart
+    # that adds nothing. Only chart when there are ≥2 groups to compare.
+    if len(result) < 2 or len(result.columns) < 2:
+        return []
+
     x = result.columns[0]
     numeric_cols = result.select_dtypes(include="number").columns.tolist()
     y = numeric_cols[0] if numeric_cols else result.columns[1]
-    if plan["action"] == "time_series":
+    if action == "time_series":
         fig = px.line(result, x=x, y=y, title=f"{y} theo {x}", markers=True)
         return [_chart("line", f"{y} theo {x}", fig, x=x, y=y)]
-    if plan["action"] in {"aggregate", "compare_metrics"}:
+    if action in {"aggregate", "compare_metrics"}:
         fig = px.bar(result, x=x, y=y, title=f"{y} theo {x}", text=y)
         fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
         return [_chart("bar", f"{y} theo {x}", fig, x=x, y=y)]
@@ -951,6 +1054,30 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
     if currency_warning:
         lines.append(f"⚠️  {currency_warning}")
         lines.append("")
+
+    if plan.get("action") == "distribution":
+        col = plan.get("column", "")
+        stats = _describe_numeric(source_df, col) if source_df is not None else {}
+        if stats:
+            lines.append(f"### Phân phối **{col}**")
+            lines.append(
+                f"- Khoảng giá trị: **{_format_cell(stats['min'])} – {_format_cell(stats['max'])}** "
+                f"(biên độ {_format_cell(stats['range'])})"
+            )
+            lines.append(
+                f"- Trung bình: {_format_cell(stats['mean'])} · "
+                f"Trung vị: {_format_cell(stats['median'])} · "
+                f"Độ lệch chuẩn: {_format_cell(stats['std'])}"
+            )
+            lines.append(f"- Tứ phân vị: Q1 = {_format_cell(stats['q1'])}, Q3 = {_format_cell(stats['q3'])}")
+            lines.append("")
+        # Top bins by count
+        if "so_luong" in result.columns:
+            top = result.sort_values("so_luong", ascending=False).head(3)
+            lines.append("### Khoảng tập trung nhiều nhất")
+            for index, row in enumerate(top.to_dict(orient="records"), start=1):
+                lines.append(f"{index}. {row['khoang_gia_tri']}: {_format_cell(row['so_luong'])} bản ghi")
+        return "\n".join(lines)
 
     if plan.get("action") == "compare_metrics" and set(result.columns) >= {"metric", "value"}:
         lines.append("### So sánh chỉ số")

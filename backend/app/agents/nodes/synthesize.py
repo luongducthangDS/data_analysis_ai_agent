@@ -67,14 +67,18 @@ def _allowed_values(result_df) -> list[float]:
     return vals
 
 
-def _numbers_grounded(answer: str, result_df) -> bool:
+def _numbers_grounded(answer: str, result_df, extra_allowed: list[float] | None = None) -> bool:
     """
     Reject answers citing large numbers absent from the result set — the most
     common hallucination for a data tool. Conservative: only checks values >= 1000.
+    `extra_allowed` lets callers whitelist derived figures (e.g. distribution stats
+    computed from the source column, not present in the binned result table).
     """
     if result_df is None or result_df.empty:
         return True
     allowed = _allowed_values(result_df)
+    if extra_allowed:
+        allowed.extend(extra_allowed)
     for num in _parse_numbers(answer):
         if abs(num) < _GROUNDING_MIN:
             continue
@@ -102,7 +106,8 @@ def synthesize_node(state: AgentState) -> AgentState:
     from backend.app.services.llm_service import get_llm_client
     from backend.app.services.storage import session_store
     from backend.app.services.analysis_planner import (
-        _deterministic_answer, _build_charts_from_result, _build_currency_warning
+        _deterministic_answer, _build_charts_from_result, _build_currency_warning,
+        _describe_numeric,
     )
     from backend.app.services.insights import generate_insights
     from backend.app.services.profiler import build_profile
@@ -140,6 +145,21 @@ def synthesize_node(state: AgentState) -> AgentState:
     # Build deterministic fallback first (always available)
     data_summary = _deterministic_answer(question, result_df, plan, source_df=df)
 
+    # For distribution questions, compute descriptive stats from the source column
+    # (the binned result table alone doesn't carry mean/median/std).
+    dist_context = ""
+    dist_allowed: list[float] = []
+    if plan.get("action") == "distribution":
+        stats = _describe_numeric(df, plan.get("column", ""))
+        if stats:
+            dist_context = (
+                f"\nTHỐNG KÊ MÔ TẢ cột '{plan.get('column')}': "
+                f"min={stats['min']}, max={stats['max']}, range={stats['range']}, "
+                f"trung bình={stats['mean']}, trung vị={stats['median']}, "
+                f"độ lệch chuẩn={stats['std']}, Q1={stats['q1']}, Q3={stats['q3']}.\n"
+            )
+            dist_allowed = [float(v) for v in stats.values() if isinstance(v, (int, float))]
+
     # Try LLM synthesis
     try:
         client = get_llm_client()
@@ -152,6 +172,7 @@ def synthesize_node(state: AgentState) -> AgentState:
             f"Câu hỏi: {question}\n\n"
             f"Kết quả phân tích từ dataset ({len(df.columns)} cột: {col_names[:8]}):\n"
             f"{rows_text}\n"
+            f"{dist_context}"
             f"{'LƯU Ý: ' + currency_note if currency_note else ''}\n\n"
             "Yêu cầu:\n"
             "- Trả lời thẳng vào câu hỏi, không giải thích bạn đang làm gì\n"
@@ -160,10 +181,11 @@ def synthesize_node(state: AgentState) -> AgentState:
             "- Không bắt đầu bằng 'Câu hỏi này...', 'Dựa trên...', hay bất kỳ meta-commentary nào\n"
             "- Không bịa số liệu ngoài kết quả phân tích\n"
             "- Nếu câu hỏi hỏi 'ai'/'người nào': nêu tên entity từ cột đầu tiên của bảng kết quả nếu có\n"
+            "- Nếu là câu hỏi phân phối: mô tả hình dạng (tập trung ở đâu, có lệch không), khoảng giá trị, và độ phân tán\n"
             "- Nếu kết quả không đủ rõ ràng hoặc dữ liệu trống: hãy nói rõ 'Không tìm thấy dữ liệu phù hợp' thay vì đoán"
         )
         answer = _call_llm(client, prompt)
-        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df):
+        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df, extra_allowed=dist_allowed):
             _log.info("synthesize_node: LLM synthesis OK (%d chars)", len(answer))
             return {**state, "answer": answer.strip(), "charts": charts, "llm_synthesis_failed": False}
         _log.warning("synthesize_node: LLM response rejected (invalid or ungrounded) — using deterministic answer")

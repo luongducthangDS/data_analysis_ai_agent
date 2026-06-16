@@ -13,7 +13,7 @@ from backend.app.agents.state import AgentState
 _log = logging.getLogger(__name__)
 
 # Allowed values — replicated here to avoid importing the full planner
-_ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile"}
+_ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution"}
 _ALLOWED_AGGREGATIONS = {"sum", "mean", "median", "min", "max", "count", "nunique"}
 _ALLOWED_FILTER_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "contains"}
 
@@ -82,11 +82,14 @@ _ACTION_ALIASES: dict[str, str] = {
     "timeseries":  "time_series",
     "time":        "time_series",
     "compare":     "compare_metrics",
+    "histogram":   "distribution",
+    "phanphoi":    "distribution",
+    "hist":        "distribution",
 }
 
 def _remap_action_aliases(plan: dict[str, Any]) -> dict[str, Any]:
     action = plan.get("action", "")
-    if action not in {"aggregate", "compare_metrics", "time_series", "profile"}:
+    if action not in _ALLOWED_ACTIONS:
         remapped = _ACTION_ALIASES.get(action)
         if remapped:
             _log.info("plan_node: remapping action %r → %r", action, remapped)
