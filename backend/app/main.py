@@ -16,7 +16,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from backend.app.api.deps import limiter
-from backend.app.api.routes import chat, health, reports, sessions, sheets, upload
+from backend.app.api.routes import chat, dashboard, export, health, reports, sessions, sheets, upload
 from backend.app.core.config import get_settings
 from backend.app.core.logging import setup_langsmith, setup_logging
 
@@ -73,6 +73,8 @@ app.include_router(chat.router)
 app.include_router(sheets.router)
 app.include_router(reports.router)
 app.include_router(sessions.router)
+app.include_router(dashboard.router)
+app.include_router(export.router)
 
 # ── Static assets ─────────────────────────────────────────────────────────────
 _assets_dir = DIST_DIR / "assets"

@@ -37,6 +37,9 @@ google-auth==2.29.0
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 
+# Chart image export (PNG via kaleido)
+kaleido>=0.2.1
+
 # Testing
 pytest==8.2.2
 pytest-mock==3.14.0

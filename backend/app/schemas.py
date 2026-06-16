@@ -129,3 +129,26 @@ class AgentChatResponse(BaseModel):
     charts: list[ChartSpec] = Field(default_factory=list)
     agent_steps: list[AgentStepSchema] = Field(default_factory=list)
     executed_queries: list[str] = Field(default_factory=list)
+
+
+# ── E-Commerce Dashboard ──────────────────────────────────────────────────────
+
+class KPICard(BaseModel):
+    label: str
+    value: str
+    delta: str | None = None
+    delta_positive: bool | None = None
+    formula: str = ""
+    is_alert: bool = False
+
+
+class DashboardResponse(BaseModel):
+    session_id: str
+    platform: str | None = None
+    kpi_cards: list[KPICard] = Field(default_factory=list)
+    charts: list[ChartSpec] = Field(default_factory=list)
+    top_products: list[dict[str, Any]] = Field(default_factory=list)
+    col_map: dict[str, str] = Field(default_factory=dict)
+    unmapped_cols: list[str] = Field(default_factory=list)
+    is_ecommerce: bool = False
+    suggested_queries: list[str] = Field(default_factory=list)
