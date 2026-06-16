@@ -30,6 +30,7 @@ class SessionModel(Base):
     __tablename__ = "sessions"
 
     session_id = Column(String(64), primary_key=True)
+    owner_id = Column(String(64), nullable=True, default="")
     filename = Column(String(255), nullable=False)
     file_names = Column(JSON, nullable=False, default=list)
     profile = Column(JSON, nullable=True)

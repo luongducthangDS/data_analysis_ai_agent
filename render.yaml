@@ -4,10 +4,47 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
+    # Persistent disk — required for uploaded files to survive redeploys.
+    # Render Disk is available on paid plans (Individual $7/mo+).
+    # Remove this block and set DATA_DIR="" if you use the free tier
+    # (uploads will be ephemeral — lost on every redeploy).
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
     envVars:
+      # ── LLM providers (set at least one) ───────────────────────────────────
       - key: GROQ_API_KEY
-        sync: false
-      - key: DATABASE_URL
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: HF_TOKEN
+        sync: false
+
+      # ── Database ────────────────────────────────────────────────────────────
+      # Use Render PostgreSQL add-on or external DB for production.
+      # Leave empty to use SQLite at DATA_DIR/sessions.db (fine for single-instance).
+      - key: DATABASE_URL
+        sync: false
+
+      # ── Storage ─────────────────────────────────────────────────────────────
+      - key: DATA_DIR
+        value: /data
+
+      # ── Auth ────────────────────────────────────────────────────────────────
+      # Set ALLOW_NO_AUTH=false and API_KEYS for real multi-user security.
+      # API_KEYS: comma-separated list, e.g. "key1,key2,key3"
+      - key: ALLOW_NO_AUTH
+        value: "false"
+      - key: API_KEYS
+        sync: false
+
+      # ── CORS ────────────────────────────────────────────────────────────────
+      # Set to your Render app URL to prevent credential leakage.
+      # Example: https://data-analysis-ai-agent.onrender.com
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # ── Session cleanup ─────────────────────────────────────────────────────
+      - key: SESSION_TTL_DAYS
+        value: "7"

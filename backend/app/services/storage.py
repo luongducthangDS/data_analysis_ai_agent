@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import os as _os
+import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 import re
@@ -10,15 +13,18 @@ import re
 import pandas as pd
 
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer, SheetRelationship
-from backend.app.database import init_db, db_session, SessionModel, ChatHistoryModel
+from backend.app.database import init_db, db_session, SessionModel
 
 
 # DATA_DIR env var lets Railway mount a persistent volume at a custom path.
 # Falls back to "data/" (relative to CWD = /app) for local dev.
-import os as _os
 BASE_DATA_DIR = Path(_os.getenv("DATA_DIR", "data"))
 UPLOAD_DIR = BASE_DATA_DIR / "uploads"
 REPORT_DIR = BASE_DATA_DIR / "reports"
+HISTORY_DIR = BASE_DATA_DIR / "history"
+
+_MAX_CACHE_SIZE = 200
+_CACHE_TTL_SECONDS = 24 * 3600
 
 
 @dataclass
@@ -28,6 +34,7 @@ class DatasetSession:
     file_path: Path | None
     dataframe: pd.DataFrame
     profile: dict[str, Any]
+    owner_id: str = ""
     report_id: str | None = None
     history: list[dict[str, str]] = field(default_factory=list)
     file_names: list[str] = field(default_factory=list)
@@ -39,14 +46,16 @@ class DatasetSession:
 class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, DatasetSession] = {}
+        self._last_accessed: dict[str, float] = {}
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
         init_db()
 
-    def create(self, filename: str, content: bytes) -> DatasetSession:
-        return self.create_multiple([(filename, content)])
+    def create(self, filename: str, content: bytes, owner_id: str = "") -> DatasetSession:
+        return self.create_multiple([(filename, content)], owner_id=owner_id)
 
-    def create_multiple(self, uploads: list[tuple[str, bytes]]) -> DatasetSession:
+    def create_multiple(self, uploads: list[tuple[str, bytes]], owner_id: str = "") -> DatasetSession:
         session_id = uuid.uuid4().hex
         file_paths: list[Path] = []
         all_sheets: dict[str, pd.DataFrame] = {}
@@ -100,23 +109,34 @@ class SessionStore:
             file_path=file_paths[0] if file_paths else None,
             dataframe=analysis_df,
             profile={},
+            owner_id=owner_id,
             file_names=file_names,
             sheets=all_sheets,
             sheet_relationships=relationships,
             sheets_context=context,
         )
         self._sessions[session_id] = session
+        self._last_accessed[session_id] = time.time()
         self._insert_session(session)
         return session
 
-    def get(self, session_id: str) -> DatasetSession:
+    def get(self, session_id: str, owner_id: str = "") -> DatasetSession:
+        self._evict_stale()
         if session_id in self._sessions:
-            return self._sessions[session_id]
-        return self._restore_from_db(session_id)
+            session = self._sessions[session_id]
+            self._check_ownership(session, owner_id)
+            self._last_accessed[session_id] = time.time()
+            return session
+        session = self._restore_from_db(session_id)
+        self._check_ownership(session, owner_id)
+        self._last_accessed[session_id] = time.time()
+        return session
 
     def save(self, session: DatasetSession) -> None:
-        """Persist profile, report_id, and history to DB. Call after any mutation."""
+        """Persist profile, report_id to DB and history to JSON file."""
         self._sessions[session.session_id] = session
+        self._last_accessed[session.session_id] = time.time()
+        self._save_history(session.session_id, session.history)
         try:
             with db_session() as db:
                 row = db.get(SessionModel, session.session_id)
@@ -125,13 +145,6 @@ class SessionStore:
                 row.profile = session.profile
                 row.report_id = session.report_id
                 row.updated_at = datetime.utcnow()
-                db.query(ChatHistoryModel).filter_by(session_id=session.session_id).delete()
-                for turn in session.history:
-                    db.add(ChatHistoryModel(
-                        session_id=session.session_id,
-                        role=turn.get("role", ""),
-                        content=turn.get("content", ""),
-                    ))
         except Exception:
             pass  # Don't crash the API if DB is temporarily unavailable
 
@@ -142,13 +155,93 @@ class SessionStore:
         except Exception:
             return len(self._sessions)
 
+    def delete_session(self, session_id: str) -> None:
+        """Remove session from cache, DB, and all associated files."""
+        self._sessions.pop(session_id, None)
+        self._last_accessed.pop(session_id, None)
+
+        # Remove uploaded files
+        for f in UPLOAD_DIR.glob(f"{session_id}_*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
+        # Remove history file
+        history_path = HISTORY_DIR / f"{session_id}.json"
+        if history_path.exists():
+            try:
+                history_path.unlink()
+            except Exception:
+                pass
+
+        # Remove from DB (cascades to chat_history)
+        try:
+            with db_session() as db:
+                row = db.get(SessionModel, session_id)
+                if row:
+                    # Delete associated report file if any
+                    if row.report_id:
+                        report_path = REPORT_DIR / f"{row.report_id}.md"
+                        if report_path.exists():
+                            try:
+                                report_path.unlink()
+                            except Exception:
+                                pass
+                    db.delete(row)
+        except Exception:
+            pass
+
+    def cleanup_old_sessions(self, max_age_days: int = 7) -> int:
+        """Delete sessions older than max_age_days. Returns number of sessions deleted."""
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        deleted = 0
+        try:
+            with db_session() as db:
+                old_rows = (
+                    db.query(SessionModel)
+                    .filter(SessionModel.created_at < cutoff)
+                    .all()
+                )
+                old_ids = [row.session_id for row in old_rows]
+            for sid in old_ids:
+                self.delete_session(sid)
+                deleted += 1
+        except Exception:
+            pass
+        return deleted
+
     # ── Private ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _check_ownership(session: DatasetSession, owner_id: str) -> None:
+        """Raise PermissionError if requesting user doesn't own this session."""
+        if session.owner_id and owner_id and session.owner_id != owner_id:
+            raise PermissionError(f"Access denied to session: {session.session_id}")
+
+    def _evict_stale(self) -> None:
+        now = time.time()
+        stale = [
+            sid for sid, t in self._last_accessed.items()
+            if now - t > _CACHE_TTL_SECONDS
+        ]
+        for sid in stale:
+            self._sessions.pop(sid, None)
+            self._last_accessed.pop(sid, None)
+
+        # Enforce max cache size via LRU eviction
+        if len(self._sessions) > _MAX_CACHE_SIZE:
+            oldest = sorted(self._last_accessed, key=lambda s: self._last_accessed[s])
+            for sid in oldest[: len(self._sessions) - _MAX_CACHE_SIZE]:
+                self._sessions.pop(sid, None)
+                self._last_accessed.pop(sid, None)
 
     def _insert_session(self, session: DatasetSession) -> None:
         try:
             with db_session() as db:
                 db.add(SessionModel(
                     session_id=session.session_id,
+                    owner_id=session.owner_id,
                     filename=session.filename,
                     file_names=session.file_names,
                     profile=session.profile,
@@ -187,7 +280,7 @@ class SessionStore:
                 raise KeyError(f"No files could be loaded for session: {session_id}")
 
             analysis_df = self._build_analysis_dataframe(all_sheets)
-            history = [{"role": h.role, "content": h.content} for h in row.history]
+            history = self._load_history(session_id)
             file_path_first = (
                 UPLOAD_DIR / f"{session_id}_{Path(file_names[0]).name.replace(' ', '_')}"
                 if file_names else None
@@ -199,6 +292,7 @@ class SessionStore:
                 file_path=file_path_first,
                 dataframe=analysis_df,
                 profile=row.profile or {},
+                owner_id=row.owner_id or "",
                 report_id=row.report_id,
                 history=history,
                 file_names=file_names,
@@ -277,6 +371,24 @@ class SessionStore:
         if suffix in {".xlsx", ".xls"}:
             return SessionStore._coerce_datetime_columns(pd.read_excel(file_path))
         raise ValueError("Only CSV, XLSX, and XLS files are supported.")
+
+    @staticmethod
+    def _save_history(session_id: str, history: list[dict[str, str]]) -> None:
+        path = HISTORY_DIR / f"{session_id}.json"
+        try:
+            path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _load_history(session_id: str) -> list[dict[str, str]]:
+        path = HISTORY_DIR / f"{session_id}.json"
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
 
     @staticmethod
     def _coerce_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:

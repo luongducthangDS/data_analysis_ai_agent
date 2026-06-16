@@ -82,15 +82,23 @@ def uploaded_session_id(client, sample_csv_bytes):
 
 @pytest.fixture
 def mock_planned_analysis(mocker):
-    mock_result = MagicMock()
-    mock_result.answer = "Tổng amount là 1000."
-    mock_result.charts = []
-    mock_result.executed_queries = ["SELECT SUM(amount) FROM dataset"]
-    return mocker.patch("backend.app.main.run_planned_analysis", return_value=mock_result)
+    from backend.app.agents.runner import AgentOutput
+    result = AgentOutput(
+        answer="Tổng amount là 1000.",
+        charts=[],
+        executed_queries=["SELECT SUM(amount) FROM dataset"],
+        intent="data_query",
+    )
+    return mocker.patch("backend.app.api.routes.chat.run", return_value=result)
 
 
 @pytest.fixture
 def mock_agent_run(mocker):
-    from backend.app.services.agent_runner import AgentResult
-    result = AgentResult(answer="Agent phân tích xong.", charts=[], agent_steps=[])
-    return mocker.patch("backend.app.main.run_agent", return_value=result)
+    from backend.app.agents.runner import AgentOutput
+    result = AgentOutput(
+        answer="Agent phân tích xong.",
+        charts=[],
+        executed_queries=[],
+        intent="data_query",
+    )
+    return mocker.patch("backend.app.api.routes.chat.run", return_value=result)

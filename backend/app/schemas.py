@@ -52,6 +52,7 @@ class AnalyzeResponse(BaseModel):
     report_id: str
     executed_queries: list[str] = Field(default_factory=list)
     guardrails: list[str] = Field(default_factory=list)
+    source: str = "llm"  # "llm" | "fallback" | "bot_info" | "off_topic"
 
 
 class ChatRequest(BaseModel):
@@ -65,6 +66,7 @@ class ChatResponse(BaseModel):
     charts: list[ChartSpec] = Field(default_factory=list)
     executed_queries: list[str] = Field(default_factory=list)
     query_type: str = "data_query"  # "data_query" | "bot_info" | "off_topic"
+    source: str = "llm"  # "llm" | "fallback" | "bot_info" | "off_topic"
 
 
 class HealthResponse(BaseModel):

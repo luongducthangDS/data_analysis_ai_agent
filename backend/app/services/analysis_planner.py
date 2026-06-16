@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import uuid
@@ -12,6 +13,8 @@ import plotly.express as px
 
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.llm_service import get_llm_client
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,7 +80,18 @@ def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
 def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
     """Rule-based fallback when LLM planning fails. Covers common DA/accounting patterns."""
     normalized = _normalize(question)
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
+    # Insight / overview / profile questions → use profile action immediately
+    _INSIGHT_KEYWORDS = (
+        "insight", "tong quan", "mo ta", "phan tich", "overview", "describe",
+        "du lieu co gi", "co gi dang", "nhan xet", "danh gia", "bao nhieu cot",
+        "bao nhieu dong", "so luong cot", "thong ke", "kham pha", "kien thuc",
+        "hieu biet", "ket luan", "du lieu nhu the nao",
+    )
+    if any(kw in normalized for kw in _INSIGHT_KEYWORDS):
+        return {"action": "profile"}
+
+    numeric_cols = _nonzero_numeric_cols(df)
     datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
     cat_cols_all = df.select_dtypes(include=["object", "category"]).columns.tolist()
 
@@ -153,17 +167,26 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
             "limit": top_n,
         }
 
-    # ── 6. "top N [metric]" — sort only, no grouping ──────────────────────────
+    # ── 6. "top N [metric]" — group by entity + sort ──────────────────────────
+    _WHO_KW = ("ai ", " ai?", "ai\n", "nguoi nao", "hoc sinh nao", "khach hang nao",
+               "nhan vien nao", "ten nao", "ai la", "la ai", "nao co", "ai co")
+    is_who = any(kw in normalized for kw in _WHO_KW) or normalized.startswith("ai ")
     if metric and any(kw in normalized for kw in ("top", "lon nhat", "nhieu nhat", "cao nhat", "nho nhat", "thap nhat")):
         filters = status_filters or []
-        return {
+        actual_agg = "max" if sort_dir == "desc" else "min"
+        label = f"{'Max' if sort_dir == 'desc' else 'Min'} {metric}"
+        entity_col = _find_name_col(df, cat_cols_all) or _find_id_col(df) or (cat_cols_all[0] if cat_cols_all else None)
+        actual_limit = 1 if is_who else top_n
+        plan: dict[str, Any] = {
             "action": "aggregate",
             "filters": filters,
-            "group_by": [_find_id_col(df) or cat_cols_all[0]] if cat_cols_all else [],
-            "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
-            "sort": [{"column": metric, "direction": sort_dir}],
-            "limit": top_n,
+            "metrics": [{"column": metric, "aggregation": actual_agg, "label": label}],
+            "sort": [{"column": label, "direction": sort_dir}],
+            "limit": actual_limit,
         }
+        if entity_col:
+            plan["group_by"] = [entity_col]
+        return plan
 
     # ── 7. Value filter: "doanh thu theo Travel" ──────────────────────────────
     value_filter = _detect_value_filter(normalized, df)
@@ -219,13 +242,25 @@ def _time_series_plan(dt_col: str, grain: str, metric: str | None, normalized: s
 
 
 def _pick_metric_from_question(normalized: str, df: pd.DataFrame) -> str | None:
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    numeric_cols = _nonzero_numeric_cols(df)
     # Direct column name in question
     for col in numeric_cols:
         if _normalize(col) in normalized:
             return col
     # Keyword match
     return _pick_metric(df, ("amount", "revenue", "doanh thu", "sales", "total", "cost", "price", "value", "tien"))
+
+
+def _nonzero_numeric_cols(df: pd.DataFrame) -> list[str]:
+    """Return numeric columns that have at least some non-zero values — skip all-zero derived cols."""
+    cols = []
+    for col in df.select_dtypes(include="number").columns:
+        try:
+            if df[col].abs().sum() > 0:
+                cols.append(col)
+        except Exception:
+            cols.append(col)
+    return cols or df.select_dtypes(include="number").columns.tolist()
 
 
 # Synonym map: Vietnamese/English phrase -> keyword that appears in column name
@@ -344,6 +379,25 @@ def _find_id_col(df: pd.DataFrame) -> str | None:
     return None
 
 
+_NAME_HINTS = ("name", "ten", "ho ten", "hoten", "ho_ten", "hoc sinh", "hocsinh",
+               "student", "khach hang", "khachhang", "nhan vien", "nhanvien",
+               "employee", "customer", "nguoi", "person", "user")
+
+
+def _find_name_col(df: pd.DataFrame, cat_cols: list[str]) -> str | None:
+    """Find the entity/name column — prefer cols whose name hints at a person/entity."""
+    for col in cat_cols:
+        cn = _normalize(col)
+        if any(h in cn for h in _NAME_HINTS):
+            return col
+    # fallback: low-cardinality categorical col that is NOT an ID
+    for col in cat_cols:
+        n = df[col].nunique()
+        if 2 <= n <= 100 and not _normalize(col).endswith("id"):
+            return col
+    return None
+
+
 def _detect_value_filter(normalized_question: str, df: pd.DataFrame) -> tuple[str, str] | None:
     """Check if any word/phrase in the question matches a categorical column VALUE."""
     match = re.search(r"\btheo\s+([\w\s]+?)(?:\s*$|\s+va\s|\s+hoac\s)", normalized_question)
@@ -364,6 +418,8 @@ def _build_plan_with_llm(
     profile: dict[str, Any],
     history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    import logging
+    _log = logging.getLogger(__name__)
     try:
         client = get_llm_client()
         prompt = _build_planner_prompt(df, question, profile, history)
@@ -373,6 +429,7 @@ def _build_plan_with_llm(
         _validate_plan_against_dataframe(df, plan)
         return plan
     except Exception as exc:
+        _log.error("LLM planner failed — falling back to rule-based: %s: %s", type(exc).__name__, exc)
         fallback = build_fallback_plan(df, question)
         fallback["_planner_fallback_reason"] = str(exc)
         _validate_plan_against_dataframe(df, fallback)
@@ -412,6 +469,7 @@ QUY TẮC TUYỆT ĐỐI:
 9. Từ "chưa thanh toán" / "pending" → filter Status != "Paid" hoặc Status = "Submitted"/"Approved"
 10. Từ "lớn nhất", "top N", "cao nhất" → sort desc, limit = N (mặc định 10)
 11. Từ "nhỏ nhất", "thấp nhất", "bottom N" → sort asc, limit = N
+12. Câu hỏi chứa "ai", "học sinh nào", "người nào", "nhân viên nào", "khách hàng nào" → PHẢI có group_by trên cột tên/entity + aggregation max/min + sort + limit:1
 {currency_note}
 SCHEMA DATASET:
 {chr(10).join(schema_lines)}
@@ -442,10 +500,36 @@ Q: "so sánh approved vs rejected"
 Q: "expense theo category và status"
 {{"action":"aggregate","group_by":["Category","Status"],"metrics":[{{"column":"Amount","aggregation":"sum","label":"Tổng Amount"}}],"sort":[{{"column":"Tổng Amount","direction":"desc"}}],"limit":30}}
 
+Q: "học sinh nào có điểm cao nhất" / "ai có score lớn nhất"
+{{"action":"aggregate","group_by":["<cột_tên_entity>"],"metrics":[{{"column":"<score_col>","aggregation":"max","label":"Điểm cao nhất"}}],"sort":[{{"column":"Điểm cao nhất","direction":"desc"}}],"limit":1}}
+
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
 
 CÂU HỎI HIỆN TẠI:
 {question}""".strip()
+
+
+_WHO_REPAIR_KEYWORDS = (
+    "ai ", " ai?", "nguoi nao", "hoc sinh nao", "khach hang nao",
+    "nhan vien nao", "ten nao", "ai la", "la ai", "nao co", "ai co",
+)
+
+
+def _repair_who_plan(plan: dict[str, Any], question: str, df: pd.DataFrame) -> dict[str, Any]:
+    """If question is a 'who' question but plan has no group_by, inject entity column."""
+    normalized = _normalize(question)
+    is_who = any(kw in normalized for kw in _WHO_REPAIR_KEYWORDS) or normalized.startswith("ai ")
+    if not is_who or plan.get("group_by"):
+        return plan
+    cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    entity_col = _find_name_col(df, cat_cols)
+    if not entity_col:
+        return plan
+    repaired = dict(plan)
+    repaired["group_by"] = [entity_col]
+    repaired.setdefault("limit", 1)
+    _log.info("_repair_who_plan: injected group_by=%r for who-question", entity_col)
+    return repaired
 
 
 def _repair_plan_for_question(plan: dict[str, Any], question: str) -> dict[str, Any]:
@@ -719,23 +803,30 @@ def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any]
         client = get_llm_client()
         rows_text = result.head(15).to_string(index=False, max_colwidth=50)
         currency_note = _build_currency_warning(source_df, plan) or ""
-        prompt = f"""Bạn là chuyên gia phân tích dữ liệu. Người dùng hỏi: "{question}"
+        col_names = list(source_df.columns) if source_df is not None else []
+        prompt = f"""Bạn là senior data analyst. Dùng kết quả phân tích sau để trả lời câu hỏi của người dùng.
 
-Kết quả phân tích:
+Câu hỏi: {question}
+
+Kết quả phân tích từ dataset:
 {rows_text}
 {f"LƯU Ý: {currency_note}" if currency_note else ""}
 
-Viết câu trả lời ngắn gọn bằng tiếng Việt (4-7 câu):
-- Nêu con số / kết quả quan trọng nhất đầu tiên
-- Chỉ ra insight hoặc pattern nổi bật (nếu có)
-- Kết luận thực tế có thể hành động được
-
-Chỉ trả lời văn xuôi tự nhiên. Không dùng code block, không lặp lại câu hỏi."""
+Yêu cầu:
+- Trả lời thẳng vào câu hỏi, không giải thích bạn đang làm gì
+- Nêu số liệu quan trọng nhất trước, sau đó insight và hành động đề xuất
+- Ngắn gọn (3-5 câu), viết tiếng Việt tự nhiên
+- Không bắt đầu bằng "Câu hỏi này...", "Dựa trên...", hay bất kỳ meta-commentary nào
+- Không bịa số liệu ngoài kết quả phân tích"""
         answer = client.generate(prompt, max_tokens=400, temperature=0.3)
-        if len(answer.strip()) >= 40:
-            return answer.strip()
-    except Exception:
-        pass
+        stripped = answer.strip()
+        bad_starts = ("error", "exception", "traceback", "none", "null", "undefined")
+        if len(stripped) >= 50 and not stripped.lower().startswith(bad_starts):
+            _log.info("LLM synthesis succeeded for question=%r", question[:80])
+            return stripped
+        _log.warning("LLM synthesis returned invalid response (%d chars)", len(stripped))
+    except Exception as exc:
+        _log.warning("LLM synthesis failed for question=%r: %s: %s", question[:80], type(exc).__name__, exc)
     return data_summary
 
 

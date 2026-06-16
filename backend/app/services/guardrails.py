@@ -3,7 +3,7 @@ from __future__ import annotations
 
 ALLOWED_TOOLS = {
     "profile_data",
-    "run_duckdb_query",
+    "execute_pandas_plan",
     "generate_charts",
     "generate_report",
 }
@@ -11,11 +11,11 @@ ALLOWED_TOOLS = {
 
 def describe_guardrails() -> list[str]:
     return [
-        "No arbitrary Python execution in MVP.",
-        "LLM can plan analysis, but execution is restricted to validated JSON tool plans.",
-        "All analysis actions go through whitelisted tools only.",
-        "DuckDB tool accepts SELECT queries only.",
-        "Upload parser accepts CSV/XLSX/XLS files only.",
+        "No arbitrary Python execution — all analysis uses validated JSON plans.",
+        "Execution engine: Pandas (no SQL, no DuckDB).",
+        "Supported operations: filter, group_by, aggregate, sort, limit, derived columns.",
+        "Upload parser accepts CSV/XLSX/XLS files only (10 MB per file).",
+        "LLM generates analysis plan; execution is deterministic and sandboxed.",
     ]
 
 

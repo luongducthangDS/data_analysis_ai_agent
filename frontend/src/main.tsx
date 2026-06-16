@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import Plot from "react-plotly.js";
 import "./styles.css";
@@ -7,7 +7,9 @@ import "./styles.css";
 interface Profile {
   rows: number;
   columns: number;
+  column_types: Record<string, string>;
   numeric_summary: Record<string, Record<string, number | null>>;
+  categorical_summary: Record<string, Array<{ value: string; count: number }>>;
   missing_values: Record<string, number>;
 }
 interface ChartSpec {
@@ -29,6 +31,9 @@ interface Message {
   charts?: ChartSpec[];
   queries?: string[];
   agentSteps?: AgentStep[];
+  source?: "llm" | "fallback" | "bot_info" | "off_topic";
+  streaming?: boolean;
+  nodes?: string[];   // graph nodes completed so far (while streaming)
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -38,33 +43,6 @@ const api = {
     files.forEach((f) => form.append("files", f));
     const r = await fetch("/api/upload", { method: "POST", body: form });
     if (!r.ok) throw new Error((await r.json()).detail ?? "Upload failed");
-    return r.json();
-  },
-  async analyze(session_id: string, question: string) {
-    const r = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id, question }),
-    });
-    if (!r.ok) throw new Error((await r.json()).detail ?? "Analyze failed");
-    return r.json();
-  },
-  async chat(session_id: string, question: string) {
-    const r = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id, question }),
-    });
-    if (!r.ok) throw new Error((await r.json()).detail ?? "Chat failed");
-    return r.json();
-  },
-  async agentChat(session_id: string, question: string) {
-    const r = await fetch("/api/agent-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id, question }),
-    });
-    if (!r.ok) throw new Error((await r.json()).detail ?? "Agent chat failed");
     return r.json();
   },
   async importUrl(url: string) {
@@ -97,9 +75,82 @@ function MdText({ text }: { text: string }) {
         if (line.startsWith("# ")) return <h1 key={i}>{line.slice(2)}</h1>;
         if (line.startsWith("⚠️")) return <p key={i} className="warn">{line}</p>;
         if (/^\d+\.\s/.test(line)) return <p key={i} className="li">{line}</p>;
+        if (line.startsWith("- ") || line.startsWith("* ")) return <p key={i} className="li">{line.slice(2)}</p>;
         if (line.trim() === "") return <div key={i} className="br" />;
         return <p key={i}>{line}</p>;
       })}
+    </div>
+  );
+}
+
+// ── Source badge ──────────────────────────────────────────────────────────────
+const SOURCE_LABELS: Record<string, { label: string; title: string; cls: string }> = {
+  llm:       { label: "AI Synthesis",      title: "Answer synthesized by LLM from analysis results", cls: "badge-llm"      },
+  fallback:  { label: "Deterministic",     title: "LLM unavailable — answer built from raw data directly", cls: "badge-fallback" },
+  bot_info:  { label: "Bot Info",          title: "Agent self-description, not data analysis", cls: "badge-bot"      },
+  off_topic: { label: "Off Topic",         title: "Question outside analysis scope", cls: "badge-bot"      },
+};
+
+function SourceBadge({ source }: { source: string }) {
+  const info = SOURCE_LABELS[source] ?? { label: source, title: source, cls: "badge-bot" };
+  return <span className={`source-badge ${info.cls}`} title={info.title}>{info.label}</span>;
+}
+
+// ── Plan detail — human-readable execution plan ───────────────────────────────
+function PlanDetail({ queries }: { queries: string[] }) {
+  if (!queries || queries.length === 0) return null;
+
+  const renderPlan = (raw: string) => {
+    try {
+      const p = JSON.parse(raw);
+      const chips: string[] = [];
+      if (p.action)        chips.push(`action: ${p.action}`);
+      if (p.metric_col)    chips.push(`metric: ${p.metric_col}`);
+      if (p.group_by?.length)  chips.push(`group by: ${p.group_by.join(", ")}`);
+      if (p.agg)           chips.push(`agg: ${p.agg}`);
+      if (p.sort)          chips.push(`sort: ${p.sort}`);
+      if (p.limit)         chips.push(`top: ${p.limit}`);
+      if (p.filters?.length)   chips.push(`filter: ${p.filters.map((f: Record<string, unknown>) => `${f.column}=${f.value}`).join(", ")}`);
+      if (p.derived_columns?.length) chips.push(`derived: ${p.derived_columns.map((d: Record<string, unknown>) => d.name).join(", ")}`);
+      return chips.length ? chips : [raw];
+    } catch {
+      return [raw];
+    }
+  };
+
+  return (
+    <details className="plan-detail">
+      <summary>Kế hoạch phân tích</summary>
+      <div className="plan-chips">
+        {queries.map((q, i) => (
+          <div key={i} className="plan-step">
+            {renderPlan(q).map((chip, j) => (
+              <span key={j} className="plan-chip">{chip}</span>
+            ))}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// ── Node progress strip ───────────────────────────────────────────────────────
+const NODE_LABELS: Record<string, string> = {
+  classify:   "Phân loại",
+  planner:    "Lập kế hoạch",
+  execute:    "Thực thi",
+  synthesize: "Tổng hợp",
+  bot_info:   "Bot Info",
+  off_topic:  "Off Topic",
+};
+
+function NodeProgress({ nodes }: { nodes: string[] }) {
+  if (!nodes.length) return null;
+  return (
+    <div className="node-progress">
+      {nodes.map((n) => (
+        <span key={n} className="node-chip done">{NODE_LABELS[n] ?? n} ✓</span>
+      ))}
     </div>
   );
 }
@@ -208,38 +259,95 @@ function App() {
     }
   }
 
-  async function send(q: string, mode: "analyze" | "chat" | "agent" = "analyze") {
+  // Streaming send — all modes use /api/chat/stream
+  const send = useCallback(async (q: string) => {
     if (!q.trim() || !sessionId || busy) return;
+
+    // Append user message
     setMessages((m) => [...m, { role: "user", content: q }]);
     setQuestion("");
     setBusy(true);
     setTab("chat");
+
+    // Append placeholder streaming assistant message
+    const assistantIdx = await new Promise<number>((resolve) => {
+      setMessages((m) => {
+        resolve(m.length);  // will be appended at this index
+        return [...m, { role: "assistant", content: "", streaming: true, nodes: [] }];
+      });
+    });
+
     try {
-      let d: Record<string, unknown>;
-      if (mode === "agent") {
-        d = await api.agentChat(sessionId, q);
-      } else if (mode === "analyze") {
-        d = await api.analyze(sessionId, q);
-      } else {
-        d = await api.chat(sessionId, q);
+      const resp = await fetch("/api/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, question: q }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: "Stream failed" }));
+        throw new Error(err.detail ?? "Stream failed");
       }
-      const charts: ChartSpec[] = (d.charts as ChartSpec[]) ?? [];
-      const agentSteps: AgentStep[] = (d.agent_steps as AgentStep[]) ?? [];
-      setMessages((m) => [...m, {
-        role: "assistant",
-        content: (d.answer as string) ?? "",
-        charts,
-        queries: (d.executed_queries as string[]) ?? [],
-        agentSteps: agentSteps.length > 0 ? agentSteps : undefined,
-      }]);
-      if (charts.length) setAllCharts((c) => [...c, ...charts]);
-      if (d.report_id) setReportId(d.report_id as string);
+
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (event.type === "node") {
+            setMessages((m) => m.map((msg, i) =>
+              i === assistantIdx
+                ? { ...msg, nodes: [...(msg.nodes ?? []), event.node as string] }
+                : msg
+            ));
+          } else if (event.type === "token") {
+            setMessages((m) => m.map((msg, i) =>
+              i === assistantIdx
+                ? { ...msg, content: msg.content + (event.content as string) }
+                : msg
+            ));
+          } else if (event.type === "done") {
+            const charts = (event.charts as ChartSpec[]) ?? [];
+            const queries = (event.executed_queries as string[]) ?? [];
+            const source = (event.source as Message["source"]) ?? "llm";
+            setMessages((m) => m.map((msg, i) =>
+              i === assistantIdx
+                ? { ...msg, streaming: false, charts, queries, source }
+                : msg
+            ));
+            if (charts.length) setAllCharts((c) => [...c, ...charts]);
+          } else if (event.type === "error") {
+            setMessages((m) => m.map((msg, i) =>
+              i === assistantIdx
+                ? { ...msg, streaming: false, content: `❌ ${event.detail}` }
+                : msg
+            ));
+          }
+        }
+      }
     } catch (e: unknown) {
-      setMessages((m) => [...m, { role: "assistant", content: `❌ ${(e as Error).message}` }]);
+      setMessages((m) => m.map((msg, i) =>
+        i === assistantIdx
+          ? { ...msg, streaming: false, content: `❌ ${(e as Error).message}` }
+          : msg
+      ));
     } finally {
       setBusy(false);
     }
-  }
+  }, [sessionId, busy]);
 
   const numericCount = profile ? Object.keys(profile.numeric_summary).length : 0;
   const missingCount = profile ? Object.values(profile.missing_values).reduce((a, b) => a + b, 0) : 0;
@@ -344,6 +452,11 @@ function App() {
           </div>
         )}
 
+        {sessionId && (
+          <a className="report-link" href={`/api/session/${sessionId}/data.csv`} download>
+            ⬇ Export CSV
+          </a>
+        )}
         {reportId && (
           <a className="report-link" href={`/api/report/${reportId}`} target="_blank" rel="noreferrer">
             ⬇ Download Report
@@ -378,6 +491,26 @@ function App() {
                 <div className="tbl-foot">
                   {profile?.rows.toLocaleString()} total rows · {profile?.columns} columns
                 </div>
+                {profile?.column_types && (
+                  <details className="col-types-detail">
+                    <summary>Column types</summary>
+                    <div className="col-types-grid">
+                      {Object.entries(profile.column_types).map(([col, dtype]) => {
+                        const missing = profile.missing_values?.[col] ?? 0;
+                        const typeClass = dtype.startsWith("int") || dtype.startsWith("float") ? "dtype-num"
+                          : dtype.startsWith("datetime") ? "dtype-date"
+                          : "dtype-cat";
+                        return (
+                          <div key={col} className="col-type-row">
+                            <span className="col-name">{col}</span>
+                            <span className={`col-dtype ${typeClass}`}>{dtype}</span>
+                            {missing > 0 && <span className="col-missing">{missing} missing</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                )}
               </>
             )}
           </div>
@@ -401,13 +534,29 @@ function App() {
                   ) : (
                     <div className="assistant-msg">
                       <div className="bubble">
-                        <MdText text={msg.content} />
+                        {/* Node progress (while streaming) */}
+                        {msg.nodes && msg.nodes.length > 0 && (
+                          <NodeProgress nodes={msg.nodes} />
+                        )}
+                        {/* Answer text */}
+                        {msg.content ? (
+                          <MdText text={msg.content} />
+                        ) : msg.streaming ? (
+                          <div className="typing"><span/><span/><span/></div>
+                        ) : null}
+                        {/* Streaming cursor */}
+                        {msg.streaming && msg.content && (
+                          <span className="cursor">▋</span>
+                        )}
+                        {/* Source badge — shown after streaming done */}
+                        {!msg.streaming && msg.source && (
+                          <div className="msg-meta">
+                            <SourceBadge source={msg.source} />
+                          </div>
+                        )}
                         {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
                         {msg.queries && msg.queries.length > 0 && (
-                          <details className="plan-detail">
-                            <summary>Plan</summary>
-                            <pre>{msg.queries.join("\n")}</pre>
-                          </details>
+                          <PlanDetail queries={msg.queries} />
                         )}
                       </div>
                       {msg.charts && msg.charts.length > 0 && (
@@ -429,11 +578,6 @@ function App() {
                   )}
                 </div>
               ))}
-              {busy && (
-                <div className="msg assistant">
-                  <div className="bubble typing"><span/><span/><span/></div>
-                </div>
-              )}
               <div ref={bottomRef} />
             </div>
             <div className="input-bar">
@@ -445,14 +589,9 @@ function App() {
               />
               <div className="input-btns">
                 <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
-                  title="Phân tích sâu — tạo kế hoạch, chạy SQL, sinh biểu đồ"
-                  onClick={() => send(question, "analyze")}>📊 Phân tích</button>
-                <button className="btn-agent" disabled={!sessionId || !question.trim() || busy}
-                  title="ReAct Agent — tự chọn nhiều tools, suy luận từng bước"
-                  onClick={() => send(question, "agent")}>🤖 Agent</button>
-                <button className="btn-sec" disabled={!sessionId || !question.trim() || busy}
-                  title="Truy vấn nhanh bằng SQL — không sinh biểu đồ"
-                  onClick={() => send(question, "chat")}>⚡ SQL</button>
+                  onClick={() => send(question)}>
+                  {busy ? "⏳ Đang xử lý…" : "📊 Phân tích"}
+                </button>
               </div>
             </div>
           </div>
