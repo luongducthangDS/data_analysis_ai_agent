@@ -30,7 +30,10 @@ def plan_node(state: AgentState) -> AgentState:
     """
     from backend.app.services.llm_service import get_llm_client
     from backend.app.services.storage import session_store
-    from backend.app.services.analysis_planner import build_fallback_plan, _build_planner_prompt, _validate_plan_against_dataframe, _repair_plan_for_question, _repair_who_plan
+    from backend.app.services.analysis_planner import (
+        build_fallback_plan, _build_planner_prompt, _validate_plan_against_dataframe,
+        _repair_plan_for_question, _repair_who_plan, _repair_column_names,
+    )
 
     question = state["question"]
     session_id = state["session_id"]
@@ -45,6 +48,7 @@ def plan_node(state: AgentState) -> AgentState:
         raw = _call_llm(client, prompt)
         plan = _extract_json(raw)
         plan = _remap_action_aliases(plan)
+        plan = _repair_column_names(plan, df)   # fuzzy-resolve LLM column names before validation
         plan = _repair_who_plan(plan, question, df)
         plan = _repair_plan_for_question(plan, question)
         _validate_plan_against_dataframe(df, plan)

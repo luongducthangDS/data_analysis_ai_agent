@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -10,6 +11,11 @@ _log = logging.getLogger(__name__)
 
 _BAD_STARTS = ("error", "exception", "traceback", "none", "null", "undefined")
 
+# Numbers >= this threshold must be traceable to the result set (anti-hallucination).
+# Small ints (years, ranks, counts like "3-5 câu") are ignored to avoid false rejects.
+_GROUNDING_MIN = 1000.0
+_GROUNDING_REL_TOL = 0.01  # 1% relative tolerance for rounding/formatting
+
 
 def _is_valid_synthesis(answer: str) -> bool:
     stripped = answer.strip()
@@ -17,6 +23,68 @@ def _is_valid_synthesis(answer: str) -> bool:
         return False
     if stripped.lower().startswith(_BAD_STARTS):
         return False
+    return True
+
+
+def _parse_numbers(text: str) -> list[float]:
+    """Extract numeric values from text, handling VN ('859.045.000') and EN ('8,950.20') formats."""
+    out: list[float] = []
+    # Drop percentages — they are derived, not raw result values.
+    text = re.sub(r"\d[\d.,]*\s*%", " ", text)
+    for tok in re.findall(r"\d[\d.,]*\d|\d", text):
+        cleaned = tok
+        if "," in cleaned and "." in cleaned:
+            # EN style: comma=thousands, dot=decimal
+            cleaned = cleaned.replace(",", "")
+        elif re.fullmatch(r"\d{1,3}(\.\d{3})+", cleaned):
+            cleaned = cleaned.replace(".", "")          # VN thousands separator
+        elif re.fullmatch(r"\d{1,3}(,\d{3})+", cleaned):
+            cleaned = cleaned.replace(",", "")          # EN thousands separator
+        else:
+            cleaned = cleaned.replace(",", ".")          # lone comma = decimal
+        try:
+            out.append(float(cleaned))
+        except ValueError:
+            continue
+    return out
+
+
+def _allowed_values(result_df) -> list[float]:
+    """Values the answer may legitimately cite: raw cells + per-column sums + row count."""
+    vals: list[float] = [float(len(result_df))]
+    for col in result_df.columns:
+        series = result_df[col]
+        numeric = series.dropna()
+        for v in numeric.tolist():
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                continue
+        try:
+            vals.append(float(numeric.astype(float).sum()))
+        except (TypeError, ValueError):
+            continue
+    return vals
+
+
+def _numbers_grounded(answer: str, result_df) -> bool:
+    """
+    Reject answers citing large numbers absent from the result set — the most
+    common hallucination for a data tool. Conservative: only checks values >= 1000.
+    """
+    if result_df is None or result_df.empty:
+        return True
+    allowed = _allowed_values(result_df)
+    for num in _parse_numbers(answer):
+        if abs(num) < _GROUNDING_MIN:
+            continue
+        # Skip bare years (e.g. "năm 2026") — narrative, not a result figure.
+        if num.is_integer() and 1900 <= num <= 2100:
+            continue
+        tol = max(abs(num) * _GROUNDING_REL_TOL, 1.0)
+        if not any(abs(num - a) <= tol for a in allowed):
+            _log.warning("synthesize_node: ungrounded number in answer: %s", num)
+            return False
     return True
 
 
@@ -95,10 +163,10 @@ def synthesize_node(state: AgentState) -> AgentState:
             "- Nếu kết quả không đủ rõ ràng hoặc dữ liệu trống: hãy nói rõ 'Không tìm thấy dữ liệu phù hợp' thay vì đoán"
         )
         answer = _call_llm(client, prompt)
-        if _is_valid_synthesis(answer):
+        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df):
             _log.info("synthesize_node: LLM synthesis OK (%d chars)", len(answer))
             return {**state, "answer": answer.strip(), "charts": charts, "llm_synthesis_failed": False}
-        _log.warning("synthesize_node: LLM returned invalid response (%d chars)", len(answer.strip()))
+        _log.warning("synthesize_node: LLM response rejected (invalid or ungrounded) — using deterministic answer")
     except Exception as exc:
         _log.warning("synthesize_node: LLM synthesis failed (%s: %s)", type(exc).__name__, exc)
 
