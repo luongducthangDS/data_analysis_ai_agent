@@ -2,9 +2,10 @@
 Query intent classifier.
 
 Classifies user questions into:
-  - "bot_info"   → questions about the chatbot itself
-  - "off_topic"  → questions unrelated to data analysis
-  - "data_query" → questions about the uploaded dataset (default)
+  - "bot_info"      → questions about the chatbot itself
+  - "off_topic"     → questions unrelated to data analysis
+  - "data_summary"  → requests for dataset overview/description (routes to profile node)
+  - "data_query"    → specific analytical questions about the dataset (default)
 """
 from __future__ import annotations
 
@@ -35,6 +36,28 @@ _BOT_INFO: list[str] = [
 
 # Short standalone greetings (≤3 words) that contain these tokens
 _GREETING_TOKENS: list[str] = ["chào", "hello", "hi", "hey", "alo"]
+
+_DATA_SUMMARY: list[str] = [
+    # Vietnamese — diacritics
+    "tóm tắt", "mô tả dữ liệu", "tổng quan", "hiểu dữ liệu",
+    "muốn hiểu", "muốn biết về dữ liệu", "dữ liệu có gì",
+    "bao nhiêu cột", "bao nhiêu dòng", "bao nhiêu hàng",
+    "thống kê mô tả", "khám phá dữ liệu", "phân tích tổng quan",
+    "phân phối dữ liệu", "cấu trúc dữ liệu", "các cột", "loại dữ liệu",
+    "cho tôi biết về dữ liệu", "cho biết về dữ liệu", "giải thích dữ liệu",
+    # Vietnamese — no diacritics (normalized)
+    "tom tat", "mo ta du lieu", "tong quan", "hieu du lieu",
+    "muon hieu", "muon biet ve du lieu", "du lieu co gi",
+    "bao nhieu cot", "bao nhieu dong", "bao nhieu hang",
+    "thong ke mo ta", "kham pha du lieu", "phan tich tong quan",
+    "phan phoi du lieu", "cau truc du lieu", "loai du lieu",
+    # English
+    "describe", "overview", "summary", "summarize",
+    "what columns", "how many rows", "how many columns",
+    "data types", "column types", "explore the data",
+    "understand the data", "tell me about the data",
+    "what is in the data", "dataset overview",
+]
 
 _OFF_TOPIC: list[str] = [
     "thời tiết", "weather", "nhiệt độ hôm nay", "dự báo thời tiết",
@@ -79,7 +102,7 @@ OFF_TOPIC_RESPONSE = (
 
 def classify_query(question: str) -> str:
     """
-    Returns 'bot_info' | 'off_topic' | 'data_query'.
+    Returns 'bot_info' | 'off_topic' | 'data_summary' | 'data_query'.
     Rule-based, O(n) keyword scan.
     """
     norm = question.lower().strip()
@@ -91,4 +114,6 @@ def classify_query(question: str) -> str:
         return "bot_info"
     if any(p in norm for p in _OFF_TOPIC):
         return "off_topic"
+    if any(p in norm for p in _DATA_SUMMARY):
+        return "data_summary"
     return "data_query"
