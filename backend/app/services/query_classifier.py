@@ -15,15 +15,22 @@ _BOT_INFO: list[str] = [
     "hello", "hi there", "hey there", "good morning", "good afternoon", "good evening",
     # identity
     "bạn là ai", "bạn tên gì", "bạn là gì",
-    "bạn làm được gì", "bạn có thể làm gì", "bạn hỗ trợ gì",
+    # capability — sub-phrases that catch all variants (có thể / làm được / giúp được)
+    "làm được gì", "có thể làm gì", "có thể giúp gì", "giúp được gì",
+    "bạn hỗ trợ gì", "hỗ trợ những gì", "có khả năng gì", "chức năng gì",
     "tính năng của bạn", "bạn có tính năng gì",
-    "who are you", "what are you", "what can you do",
-    "tell me about yourself", "your capabilities",
+    "who are you", "what are you", "what can you do", "what do you do",
+    "tell me about yourself", "your capabilities", "your features",
     "hướng dẫn sử dụng", "cách dùng", "cách sử dụng",
     "how to use", "how do i use",
     "bạn được tạo bởi", "bạn do ai tạo", "who made you", "who created you",
     "xây dựng bởi", "developed by", "built by",
     "bạn là chatbot", "bạn là ai vậy", "em là ai",
+    # help requests — conversational, không liên quan data
+    "cần bạn hỗ trợ", "cần hỗ trợ", "cần giúp đỡ", "cần giúp",
+    "nhờ bạn giúp", "giúp tôi với", "giúp mình với",
+    "need help", "help me", "can you help", "i need help",
+    "bạn có thể giúp tôi", "bạn giúp tôi",
 ]
 
 # Short standalone greetings (≤3 words) that contain these tokens

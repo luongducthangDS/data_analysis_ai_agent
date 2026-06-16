@@ -22,14 +22,24 @@ env/
 # Node
 node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Frontend build output (vite outDir: "../dist")
+dist/
 
 # Runtime data
 data/uploads/
 data/reports/
+data/history/
 data/*.db
 test_write
 
+# Eval results and temp files
+results/
+uv3_*.txt
+
 # Logs and local files
+logs/
 *.log
 .idea/
 .vscode/
