@@ -411,13 +411,13 @@ function App() {
     setDashboardData(null);
     setTab("preview");
 
-    // Auto-fetch AI dashboard — always switch to dashboard tab when ready
+    // Auto-fetch AI dashboard in background — tab appears in nav, user clicks when ready
     fetch(`/api/dashboard/${sid}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((dash: DashboardData | null) => {
         if (!dash || !dash.kpi_cards?.length) return;
         setDashboardData(dash);
-        setTab("dashboard");
+        // Do NOT auto-switch — let user navigate to Dashboard when they want
       })
       .catch(() => {});
   }

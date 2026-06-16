@@ -204,7 +204,19 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
             "limit": 20,
         }
 
-    # ── 8. Last resort ─────────────────────────────────────────────────────────
+    # ── 8. Numeric range / threshold filter ────────────────────────────────────
+    # e.g. "số lượng học sinh điểm dưới 5", "count records where X < threshold"
+    num_threshold = _detect_numeric_threshold(normalized)
+    if num_threshold and metric:
+        op, val = num_threshold
+        return {
+            "action": "aggregate",
+            "filters": [{"column": metric, "operator": op, "value": val}],
+            "metrics": [{"column": metric, "aggregation": "count", "label": "Số lượng"}],
+            "limit": 1,
+        }
+
+    # ── 9. Last resort ─────────────────────────────────────────────────────────
     if numeric_cols:
         return {
             "action": "compare_metrics",
@@ -214,6 +226,28 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
 
 
 # ── Fallback helpers ───────────────────────────────────────────────────────────
+
+def _detect_numeric_threshold(normalized: str) -> tuple[str, float] | None:
+    """
+    Parse queries like "điểm dưới 5", "score >= 8", "salary trên 10 triệu".
+    Returns (operator, value) or None.
+    """
+    _OP_PATTERNS: list[tuple[str, str]] = [
+        (r"(?:duoi|nho hon|<|thap hon|below|less than|under)\s+([\d,.]+)", "lt"),
+        (r"(?:tren|lon hon|>|cao hon|above|greater than|over)\s+([\d,.]+)", "gt"),
+        (r"(?:bang|=|equal)\s+([\d,.]+)", "eq"),
+        (r"(?:>=|lon hon hoac bang|at least)\s+([\d,.]+)", "gte"),
+        (r"(?:<=|nho hon hoac bang|at most)\s+([\d,.]+)", "lte"),
+    ]
+    for pattern, op in _OP_PATTERNS:
+        m = re.search(pattern, normalized)
+        if m:
+            raw = m.group(1).replace(",", "")
+            try:
+                return op, float(raw)
+            except ValueError:
+                pass
+    return None
 
 def _time_series_plan(dt_col: str, grain: str, metric: str | None, normalized: str) -> dict[str, Any]:
     if not metric:
@@ -504,6 +538,12 @@ Q: "expense theo category và status"
 Q: "học sinh nào có điểm cao nhất" / "ai có score lớn nhất"
 {{"action":"aggregate","group_by":["<cột_tên_entity>"],"metrics":[{{"column":"<score_col>","aggregation":"max","label":"Điểm cao nhất"}}],"sort":[{{"column":"Điểm cao nhất","direction":"desc"}}],"limit":1}}
 
+Q: "số lượng học sinh có điểm dưới 5" / "đếm số bản ghi thỏa điều kiện X < N"
+{{"action":"aggregate","filters":[{{"column":"<score_col>","operator":"lt","value":5}}],"metrics":[{{"column":"<score_col>","aggregation":"count","label":"Số học sinh"}}],"limit":1}}
+
+Q: "danh sách học sinh điểm cộng lần 2 dưới 5" / "liệt kê người nào có X < threshold"
+{{"action":"aggregate","filters":[{{"column":"<score_col>","operator":"lt","value":5}}],"group_by":["<tên_entity_col>"],"metrics":[{{"column":"<score_col>","aggregation":"max","label":"Điểm"}}],"sort":[{{"column":"Điểm","direction":"asc"}}],"limit":50}}
+
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
 {_format_ecommerce_context(ecommerce_col_map)}
 CÂU HỎI HIỆN TẠI:
@@ -530,6 +570,67 @@ def _repair_who_plan(plan: dict[str, Any], question: str, df: pd.DataFrame) -> d
     repaired["group_by"] = [entity_col]
     repaired.setdefault("limit", 1)
     _log.info("_repair_who_plan: injected group_by=%r for who-question", entity_col)
+    return repaired
+
+
+def _repair_column_names(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, Any]:
+    """
+    Fuzzy-resolve LLM-generated column names to actual DataFrame columns.
+
+    The LLM often generates slightly wrong column names (wrong case, missing diacritics,
+    truncated, or translated). This prevents _require_column from raising a ValueError
+    that would fall back to the dumb profile plan.
+
+    Strategy (in priority order):
+      1. Exact match → no change
+      2. Normalized match (strip diacritics, lowercase, collapse spaces)
+      3. Substring: normalized_llm ⊆ normalized_actual or vice versa (shortest wins)
+      4. Word intersection: any word of normalized_llm matches any word of normalized_actual
+         (splits on whitespace AND underscores so Diem_cong_2 → {diem, cong, 2})
+    """
+    norm_map: dict[str, str] = {c: _normalize(c) for c in df.columns}
+
+    def _word_set(s: str) -> set[str]:
+        return set(re.sub(r"[_\-]+", " ", s).split())
+
+    def _resolve(col: str) -> str:
+        if col in df.columns:
+            return col
+        n = _normalize(col)
+        # 1. Normalized exact
+        for actual, norm in norm_map.items():
+            if norm == n:
+                return actual
+        # 2. Substring (prefer actual col whose normalized length is closest to query)
+        matches = [actual for actual, norm in norm_map.items() if n in norm or norm in n]
+        if matches:
+            best = min(matches, key=lambda c: abs(len(norm_map[c]) - len(n)))
+            _log.info("_repair_column_names: %r → %r (substring)", col, best)
+            return best
+        # 3. Word intersection (split on whitespace AND underscores)
+        words = _word_set(n)
+        scored = [(len(words & _word_set(norm)), actual) for actual, norm in norm_map.items()]
+        best_score, best_col = max(scored, key=lambda x: x[0])
+        if best_score >= 1:
+            _log.info("_repair_column_names: %r → %r (word overlap=%d)", col, best_col, best_score)
+            return best_col
+        return col  # unresolvable — leave as-is so validation gives a clear error
+
+    repaired = json.loads(json.dumps(plan))  # deep copy
+    if isinstance(repaired.get("group_by"), list):
+        repaired["group_by"] = [_resolve(c) for c in repaired["group_by"]]
+    if isinstance(repaired.get("time_column"), str):
+        repaired["time_column"] = _resolve(repaired["time_column"])
+    for item in repaired.get("filters") or []:
+        if isinstance(item.get("column"), str):
+            item["column"] = _resolve(item["column"])
+    for metric in repaired.get("metrics") or []:
+        if isinstance(metric.get("column"), str):
+            metric["column"] = _resolve(metric["column"])
+    for derived in repaired.get("derived_columns") or []:
+        for key in ("source", "quantity", "unit_price", "discount_pct"):
+            if isinstance(derived.get(key), str):
+                derived[key] = _resolve(derived[key])
     return repaired
 
 
