@@ -37,6 +37,8 @@ class SessionModel(Base):
     report_id = Column(String(64), nullable=True)
     sheet_relationships = Column(JSON, nullable=False, default=list)
     sheets_context = Column(Text, nullable=True)
+    ecommerce_col_map = Column(JSON, nullable=True, default=None)
+    detected_platform = Column(String(32), nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -68,6 +70,23 @@ class ChatHistoryModel(Base):
 def init_db() -> None:
     """Create all tables if they don't exist. Called once on app startup."""
     Base.metadata.create_all(bind=engine)
+    _migrate_add_ecommerce_columns()
+
+
+def _migrate_add_ecommerce_columns() -> None:
+    """Idempotent: add new columns to existing sessions table (SQLite + PostgreSQL safe)."""
+    from sqlalchemy import text
+    new_cols = [
+        ("ecommerce_col_map", "JSON"),
+        ("detected_platform", "VARCHAR(32)"),
+    ]
+    with engine.connect() as conn:
+        for col_name, col_type in new_cols:
+            try:
+                conn.execute(text(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
 
 
 @contextmanager

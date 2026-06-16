@@ -17,17 +17,66 @@ class GroupedMetricIntent:
 
 
 METRIC_SYNONYMS = {
-    "sales": ("sales", "revenue", "amount", "total", "doanh thu", "turnover"),
-    "profit": ("profit", "margin", "lợi nhuận", "loi nhuan"),
-    "quantity": ("quantity", "qty", "units", "số lượng", "so luong"),
+    "sales": (
+        "sales", "revenue", "amount", "total", "doanh thu", "turnover",
+        # VN e-commerce platform variants
+        "thanh tien", "tong tien", "gmv", "tien hang",
+        "tong gia tri don hang", "tong so tien nguoi mua thanh toan",
+        "tong thuc thu", "seller revenue", "net revenue",
+        "thanh tien don hang", "so tien",
+    ),
+    "profit": ("profit", "margin", "lợi nhuận", "loi nhuan", "lai", "loi nhuan gop"),
+    "quantity": (
+        "quantity", "qty", "units", "số lượng", "so luong",
+        "sl", "so luong ban", "units sold", "order quantity",
+    ),
+    "order_count": (
+        "so don", "don hang", "order count", "so luong don",
+        "dem don", "total orders", "number of orders",
+    ),
+    "cancel_rate": (
+        "ty le huy", "ty le huy don", "cancel rate", "cancellation rate",
+        "huy don", "don huy",
+    ),
+    "return_rate": (
+        "ty le hoan", "ty le tra hang", "return rate", "refund rate",
+        "tra hang", "hoan hang",
+    ),
+    "aov": (
+        "aov", "average order value", "gia tri trung binh don hang",
+        "don hang trung binh", "trung binh don",
+    ),
 }
 
 DIMENSION_SYNONYMS = {
-    "product": ("product", "product_name", "sản phẩm", "san pham", "mặt hàng", "mat hang"),
+    "product": (
+        "product", "product_name", "sản phẩm", "san pham", "mặt hàng", "mat hang",
+        "ten sp", "ten san pham", "ten hang", "item", "sku name",
+    ),
     "region": ("region", "area", "zone", "vùng", "vung", "khu vực", "khu vuc", "miền", "mien"),
-    "category": ("category", "segment", "product category", "nhóm", "nhom", "danh mục", "danh muc"),
+    "category": (
+        "category", "segment", "product category", "nhóm", "nhom", "danh mục", "danh muc",
+        "loai san pham", "nganh hang",
+    ),
     "country": ("country", "quốc gia", "quoc gia"),
-    "customer": ("customer", "client", "khách hàng", "khach hang"),
+    "customer": (
+        "customer", "client", "khách hàng", "khach hang",
+        "nguoi mua", "buyer", "ten nguoi mua",
+    ),
+    "platform": (
+        "platform", "san", "kenh ban", "kenh", "channel", "marketplace",
+        "nen tang", "shopee", "lazada", "tiktok",
+    ),
+    "shop": (
+        "shop", "cua hang", "ten shop", "store", "seller", "ten cua hang",
+    ),
+    "sku": (
+        "sku", "ma sku", "ma san pham", "product sku", "barcode", "ma sp",
+    ),
+    "date": (
+        "ngay", "thang", "nam", "date", "month", "year",
+        "ngay dat hang", "ngay tao don", "ngay thanh toan",
+    ),
 }
 
 

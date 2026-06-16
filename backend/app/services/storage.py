@@ -41,6 +41,8 @@ class DatasetSession:
     sheets: dict[str, pd.DataFrame] = field(default_factory=dict)
     sheet_relationships: list[SheetRelationship] = field(default_factory=list)
     sheets_context: str = ""
+    ecommerce_col_map: dict[str, str] = field(default_factory=dict)
+    detected_platform: str | None = None
 
 
 class SessionStore:
@@ -103,6 +105,11 @@ class SessionStore:
             relationships = MultiSheetAnalyzer.detect_relationships(all_sheets)
             context = MultiSheetAnalyzer.generate_sheets_context(all_sheets, relationships)
 
+        # Detect e-commerce column mapping before persisting
+        from backend.app.services.ecommerce_columns import detect_ecommerce_columns, detect_platform
+        ecom_col_map = detect_ecommerce_columns(analysis_df)
+        detected_platform = detect_platform(analysis_df, ecom_col_map, filename=uploads[0][0])
+
         session = DatasetSession(
             session_id=session_id,
             filename=uploads[0][0],
@@ -114,6 +121,8 @@ class SessionStore:
             sheets=all_sheets,
             sheet_relationships=relationships,
             sheets_context=context,
+            ecommerce_col_map=ecom_col_map,
+            detected_platform=detected_platform,
         )
         self._sessions[session_id] = session
         self._last_accessed[session_id] = time.time()
@@ -248,6 +257,8 @@ class SessionStore:
                     report_id=session.report_id,
                     sheet_relationships=self._serialize_relationships(session.sheet_relationships),
                     sheets_context=session.sheets_context,
+                    ecommerce_col_map=session.ecommerce_col_map or None,
+                    detected_platform=session.detected_platform,
                 ))
         except Exception:
             pass
@@ -299,6 +310,8 @@ class SessionStore:
                 sheets=all_sheets,
                 sheet_relationships=self._deserialize_relationships(row.sheet_relationships),
                 sheets_context=row.sheets_context or "",
+                ecommerce_col_map=row.ecommerce_col_map or {},
+                detected_platform=row.detected_platform,
             )
             self._sessions[session_id] = session
             return session

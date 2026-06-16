@@ -41,7 +41,7 @@ def plan_node(state: AgentState) -> AgentState:
         df = session.dataframe
         profile = session.profile or {}
         client = get_llm_client()
-        prompt = _build_planner_prompt(df, question, profile, history)
+        prompt = _build_planner_prompt(df, question, profile, history, session.ecommerce_col_map or None)
         raw = _call_llm(client, prompt)
         plan = _extract_json(raw)
         plan = _remap_action_aliases(plan)

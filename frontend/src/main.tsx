@@ -36,6 +36,26 @@ interface Message {
   nodes?: string[];   // graph nodes completed so far (while streaming)
 }
 
+interface KPICard {
+  label: string;
+  value: string;
+  delta: string | null;
+  delta_positive: boolean | null;
+  formula: string;
+  is_alert: boolean;
+}
+interface DashboardData {
+  session_id: string;
+  platform: string | null;
+  kpi_cards: KPICard[];
+  charts: ChartSpec[];
+  top_products: Record<string, unknown>[];
+  col_map: Record<string, string>;
+  unmapped_cols: string[];
+  is_ecommerce: boolean;
+  suggested_queries: string[];
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 const api = {
   async upload(files: File[]) {
@@ -183,6 +203,178 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
   );
 }
 
+// ── KPI Card ─────────────────────────────────────────────────────────────────
+function KPICardComponent({ card }: { card: KPICard }) {
+  return (
+    <div className={`kpi-card${card.is_alert ? " kpi-alert" : ""}`}>
+      <div className="kpi-label">{card.label}</div>
+      <div className="kpi-value">{card.value}</div>
+      {card.delta && (
+        <div className={`kpi-delta ${card.delta_positive ? "positive" : "negative"}`}>
+          {card.delta_positive ? "▲" : "▼"} {card.delta}
+        </div>
+      )}
+      {card.formula && (
+        <details className="kpi-formula">
+          <summary>Xem công thức</summary>
+          <span>{card.formula}</span>
+        </details>
+      )}
+    </div>
+  );
+}
+
+// ── Dashboard Panel ───────────────────────────────────────────────────────────
+function DashboardPanel({
+  data,
+  sessionId,
+  onAsk,
+}: {
+  data: DashboardData;
+  sessionId: string;
+  onAsk: (q: string) => void;
+}) {
+  const [subTab, setSubTab] = React.useState<"kpi" | "products" | "trends">("kpi");
+  const trendChart = data.charts.find((c) => c.chart_type === "line");
+  const otherCharts = data.charts.filter((c) => c.chart_type !== "line");
+
+  return (
+    <div className="panel dashboard-panel">
+      <div className="panel-head">
+        Dashboard
+        {data.platform && (
+          <span className="platform-badge">{data.platform.charAt(0).toUpperCase() + data.platform.slice(1)}</span>
+        )}
+        <a className="export-xlsx-btn" href={`/api/dashboard/${sessionId}/export.xlsx`} download>
+          ⬇ Xuất Excel
+        </a>
+      </div>
+
+      {data.unmapped_cols.length > 0 && (
+        <div className="unmapped-notice">
+          ⚠ Không nhận diện được: {data.unmapped_cols.join(", ")} — hỏi chatbot để phân tích thủ công.
+        </div>
+      )}
+
+      {/* Sub-tabs */}
+      <div className="dashboard-subtabs">
+        {(["kpi", "products", "trends"] as const).map((t) => (
+          <button
+            key={t}
+            className={`dash-tab${subTab === t ? " active" : ""}`}
+            onClick={() => setSubTab(t)}
+          >
+            {t === "kpi" && "📊 KPI"}
+            {t === "products" && "🏆 Top 10"}
+            {t === "trends" && "📈 Xu hướng"}
+          </button>
+        ))}
+      </div>
+
+      {/* KPI sub-tab */}
+      {subTab === "kpi" && (
+        <>
+          <div className="kpi-grid">
+            {data.kpi_cards.map((card) => (
+              <KPICardComponent key={card.label} card={card} />
+            ))}
+          </div>
+          {/* Non-trend charts (bar charts: top products, by platform) */}
+          {otherCharts.length > 0 && (
+            <div className="chart-grid" style={{ marginTop: 24 }}>
+              {otherCharts.map((c) => (
+                <div key={c.chart_id} className="chart-card">
+                  <div className="chart-title">{c.title}</div>
+                  <Plot
+                    data={c.plotly_json.data as never}
+                    layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 120, r: 16, t: 32, b: 48 } }}
+                    useResizeHandler style={{ width: "100%", height: "320px" }}
+                    config={{ displayModeBar: false }}
+                  />
+                  <a
+                    className="chart-export-link"
+                    href={`/api/dashboard/${sessionId}/export-chart/${c.chart_id}.png`}
+                    download
+                  >
+                    ⬇ Tải ảnh
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* AI-generated suggested queries */}
+          {data.suggested_queries?.length > 0 && (
+            <div className="suggestions" style={{ marginTop: 20 }}>
+              <div className="sugg-label">Phân tích sâu hơn</div>
+              {data.suggested_queries.map((q) => (
+                <button key={q} className="chip" onClick={() => onAsk(q)}>{q}</button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Products sub-tab */}
+      {subTab === "products" && (
+        <div className="tbl-wrap">
+          {data.top_products.length === 0 ? (
+            <div className="empty">
+              <div className="empty-sub">Không có dữ liệu phân nhóm (cần cột phân loại)</div>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Nhóm</th>
+                  <th>Giá trị</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.top_products.map((p, i) => (
+                  <tr key={i}>
+                    <td>{String(p.rank ?? i + 1)}</td>
+                    <td>{String(p.name ?? "")}</td>
+                    <td>{typeof p.value === "number" ? p.value.toLocaleString("vi-VN") : String(p.value ?? "—")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Trends sub-tab */}
+      {subTab === "trends" && (
+        <div>
+          {trendChart ? (
+            <div className="chart-card" style={{ marginTop: 8 }}>
+              <div className="chart-title">{trendChart.title}</div>
+              <Plot
+                data={trendChart.plotly_json.data as never}
+                layout={{ ...(trendChart.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 56, r: 16, t: 32, b: 64 } }}
+                useResizeHandler style={{ width: "100%", height: "360px" }}
+                config={{ displayModeBar: false }}
+              />
+              <a
+                className="chart-export-link"
+                href={`/api/dashboard/${sessionId}/export-chart/${trendChart.chart_id}.png`}
+                download
+              >
+                ⬇ Tải ảnh
+              </a>
+            </div>
+          ) : (
+            <div className="empty">
+              <div className="empty-sub">Không có dữ liệu xu hướng (cần cột ngày đặt hàng)</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   const [sessionId, setSessionId] = useState("");
@@ -193,7 +385,8 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"preview" | "chat" | "charts">("preview");
+  const [tab, setTab] = useState<"dashboard" | "preview" | "chat" | "charts">("preview");
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [allCharts, setAllCharts] = useState<ChartSpec[]>([]);
   const [reportId, setReportId] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -207,14 +400,26 @@ function App() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   function applyUploadResponse(d: Record<string, unknown>) {
-    setSessionId(d.session_id as string);
+    const sid = d.session_id as string;
+    setSessionId(sid);
     setProfile(d.profile as Profile);
     setPreviewCols((d.preview_columns as string[]) ?? []);
     setPreviewRows((d.preview_rows as Record<string, string>[]) ?? []);
     setSuggestions((d.suggested_queries as string[]) ?? []);
     setMessages([]);
     setAllCharts([]);
+    setDashboardData(null);
     setTab("preview");
+
+    // Auto-fetch AI dashboard — always switch to dashboard tab when ready
+    fetch(`/api/dashboard/${sid}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((dash: DashboardData | null) => {
+        if (!dash || !dash.kpi_cards?.length) return;
+        setDashboardData(dash);
+        setTab("dashboard");
+      })
+      .catch(() => {});
   }
 
   async function handleFiles(files: FileList | File[]) {
@@ -367,6 +572,11 @@ function App() {
         </div>
 
         <nav>
+          {dashboardData && dashboardData.kpi_cards?.length > 0 && (
+            <button className={`nav-item${tab === "dashboard" ? " active" : ""}`} onClick={() => setTab("dashboard")}>
+              📊&nbsp;Dashboard
+            </button>
+          )}
           {(["preview", "chat", "charts"] as const).map((t) => (
             <button key={t} className={`nav-item${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
               {t === "preview" && "📊"}{t === "chat" && "💬"}{t === "charts" && "📈"}&nbsp;
@@ -466,6 +676,15 @@ function App() {
 
       {/* Main */}
       <main className="main">
+        {/* Dashboard tab */}
+        {tab === "dashboard" && dashboardData && (
+          <DashboardPanel
+            data={dashboardData}
+            sessionId={sessionId}
+            onAsk={(q) => { send(q); setTab("chat"); }}
+          />
+        )}
+
         {/* Preview tab */}
         {tab === "preview" && (
           <div className="panel">

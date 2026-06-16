@@ -441,6 +441,7 @@ def _build_planner_prompt(
     question: str,
     profile: dict[str, Any],
     history: list[dict[str, str]] | None = None,
+    ecommerce_col_map: dict[str, str] | None = None,
 ) -> str:
     schema_lines = []
     for col, dtype in profile["column_types"].items():
@@ -504,7 +505,7 @@ Q: "học sinh nào có điểm cao nhất" / "ai có score lớn nhất"
 {{"action":"aggregate","group_by":["<cột_tên_entity>"],"metrics":[{{"column":"<score_col>","aggregation":"max","label":"Điểm cao nhất"}}],"sort":[{{"column":"Điểm cao nhất","direction":"desc"}}],"limit":1}}
 
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
-
+{_format_ecommerce_context(ecommerce_col_map)}
 CÂU HỎI HIỆN TẠI:
 {question}""".strip()
 
@@ -1033,6 +1034,16 @@ def _mentioned_quarters(normalized_question: str) -> set[int]:
     quarters = {int(match) for match in re.findall(r"\bq([1-4])\b", normalized_question)}
     quarters.update(int(match) for match in re.findall(r"\bquy\s*([1-4])\b", normalized_question))
     return quarters
+
+
+def _format_ecommerce_context(col_map: dict[str, str] | None) -> str:
+    if not col_map:
+        return ""
+    lines = ["", "COLUMN MAPPING E-COMMERCE (dùng đúng tên cột này trong plan):"]
+    for canonical, actual in col_map.items():
+        lines.append(f"  {canonical} → \"{actual}\"")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _format_history(history: list[dict[str, str]] | None) -> str:
