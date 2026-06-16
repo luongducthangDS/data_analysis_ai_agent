@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "PowerShell(Start-Sleep -Seconds 4; try { $r = Invoke-WebRequest -Uri \"http://localhost:8501\" -TimeoutSec 5; \"Status: $\\($r.StatusCode\\)\" } catch { \"Error: $_\" })",
+      "Bash(git commit -m 'fix: expose LLM provider, add HF tool-calling, always call LLM in insights *)",
+      "PowerShell(git -C \"d:\\\\Projects for CV\\\\data-analysis-ai-agent\" diff backend/app/main.py backend/app/schemas.py backend/app/services/llm_service.py requirements.txt --stat)",
+      "PowerShell(git -C \"d:\\\\Projects for CV\\\\data-analysis-ai-agent\" diff --stat backend/app/main.py backend/app/schemas.py requirements.txt)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('evals/eval_streamlit.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}
