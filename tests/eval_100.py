@@ -44,16 +44,15 @@ import requests
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "data" / "samples"
-UPLOADS = ROOT / "data" / "uploads"   # fallback nếu samples không có file
 
-# File paths (dùng samples/, còn lại fallback sang uploads/)
+# File paths — tất cả dataset eval nằm trong data/samples/ (đi kèm repo, không PII).
 FILES = {
     "sales_sample":      SAMPLES / "sales_sample.csv",
-    "sales_data":        UPLOADS / "179c58605be14358b9c6939401c89ee1_sales_data.csv",
-    "financial_sample":  UPLOADS / "31bd20d6bd9c49859a60bb1f45cd53c6_FinancialSample.xlsx-Sheet1.csv",
-    "general_ledger":    UPLOADS / "8e4f2b8cafec45cd9f7114c1447d96b6_General-Ledger.xlsx",
-    "expense_claims":    UPLOADS / "8e4f2b8cafec45cd9f7114c1447d96b6_Expense-Claims.xlsx",
-    "viet_relational":   UPLOADS / "754d49641cd34053a2b6dbf3ad84198b_viet_sales_relational.xlsx",
+    "sales_data":        SAMPLES / "sales_data.csv",
+    "financial_sample":  SAMPLES / "financial_sample.csv",
+    "general_ledger":    SAMPLES / "general_ledger.xlsx",
+    "expense_claims":    SAMPLES / "expense_claims.xlsx",
+    "viet_relational":   SAMPLES / "viet_sales_relational.xlsx",
 }
 
 # ── Ground truths (tính sẵn từ pandas) ────────────────────────────────────────
@@ -110,7 +109,7 @@ def _load_ground_truths() -> None:
                 errors="coerce",
             )
         for col in df.select_dtypes("object").columns:
-            if col not in ["Segment", "Country", " Product ", " Discount Band ", "Month Name"]:
+            if col not in ["Segment", "Country", " Product ", " Discount Band ", " Month Name ", "Date"]:
                 df[col] = _clean(df[col])
         GROUND_TRUTH["fin_total_profit"]        = round(float(df[" Profit "].sum()), 0)
         GROUND_TRUTH["fin_top_country"]         = df.groupby("Country")["  Sales "].sum().idxmax()
@@ -119,7 +118,7 @@ def _load_ground_truths() -> None:
         GROUND_TRUTH["fin_2015_sales"]          = round(float(df[df["Year"] == 2015]["  Sales "].sum()), 0)
         GROUND_TRUTH["fin_top_product_profit"]  = df.groupby(" Product ")[ " Profit "].sum().idxmax()
         GROUND_TRUTH["fin_total_units"]         = int(df["Units Sold"].sum())
-        GROUND_TRUTH["fin_top_month"]           = df.groupby("Month Name")["  Sales "].sum().idxmax()
+        GROUND_TRUTH["fin_top_month"]           = df.groupby(" Month Name ")["  Sales "].sum().idxmax()
     except Exception as e:
         print(f"[WARN] financial_sample ground truth lỗi: {e}")
 

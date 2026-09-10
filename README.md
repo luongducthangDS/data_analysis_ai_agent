@@ -103,6 +103,8 @@ pytest -q                    # 101 unit test (agent, planner, storage, failover,
 python tests/eval_100.py     # eval framework — cần server đang chạy
 ```
 
+6 dataset eval nằm sẵn trong `data/samples/` (dữ liệu tổng hợp / mẫu công khai, không PII) — `eval_100.py` tự upload rồi chấm với ground truth tính bằng pandas.
+
 ## Giới hạn (có chủ đích)
 
 Đây là **dự án chứng minh năng lực AI‑engineering**, không phải sản phẩm thương mại:
