@@ -31,7 +31,7 @@ Backend **validate plan với schema thật của DataFrame** (tên cột, kiể
 | **Độ tin cậy LLM** | Chuỗi failover 6 mắt xích — 3 model Gemini (`flash-lite → flash`) → 3 model OpenRouter. Lỗi runtime (429 / 404 / timeout) tự chuyển model kế; cạn chuỗi mới xuống rule‑based. |
 | **Safe tool‑calling** | Whitelist action & aggregation, plan validate với DataFrame, thực thi pandas tất định trong "sandbox" thao tác. |
 | **Grounding** | Câu tổng hợp bị **từ chối** nếu chứa con số không khớp kết quả tính (`_numbers_grounded`) → tránh bịa số. |
-| **Evaluation** | `tests/eval_100.py` — 100 câu hỏi / 6 dataset, chấm `correctness`, `relevance`, `lang_quality`, `latency`, tỉ lệ rơi fallback. |
+| **Evaluation** | `tests/eval_100.py` — 100 câu / 6 dataset, ground truth tính bằng pandas. Chiều cứng `correctness` (số ±10%) + 3 chiều mềm đã calibrate với nhãn tay (`eval_calibration.py`); tùy chọn LLM-as-judge. Baseline: **81/100**, xem [`docs/EVALUATION.md`](docs/EVALUATION.md). |
 | **Fuzzy column resolution** | LLM gọi sai tên cột (thiếu dấu, viết tắt) → resolver khớp mờ về tên thật trước khi validate. |
 | **Multi‑sheet / multi‑file** | Tự phát hiện quan hệ giữa các sheet; planner sinh **cross‑sheet join**; cảnh báo fan‑out khi join 1‑nhiều làm phồng số dòng. |
 | **Full‑stack** | FastAPI + React/Vite, dashboard tự sinh KPI theo domain, export CSV/Markdown, đóng gói Docker, health check. |
@@ -106,12 +106,16 @@ pytest -q                    # 101 unit test (agent, planner, storage, failover,
 
 # eval end-to-end — cần server đang chạy + GEMINI_API_KEY
 uvicorn backend.app.main:app --port 8000 &
-python tests/eval_100.py --base-url http://localhost:8000 --delay 2
+python tests/eval_100.py --base-url http://localhost:8000 --delay 3 \
+    --baseline docs/eval-baseline/summary.json    # kèm bảng regression
+
+python tests/eval_100.py --rescore docs/eval-baseline/results.csv   # chấm lại run cũ, không cần server
+python tests/eval_calibration.py                                     # heuristic vs nhãn tay
 ```
 
 6 dataset eval nằm sẵn trong `data/samples/` (dữ liệu tổng hợp / mẫu công khai, không PII) — `eval_100.py` tự upload rồi chấm với ground truth tính bằng pandas. `--delay` giãn nhịp request để không đụng rate‑limit free tier.
 
-**Kết quả baseline** (100 câu, đã commit): xem [`docs/EVALUATION.md`](docs/EVALUATION.md).
+**Kết quả baseline, calibration, và bug agent do eval phát hiện**: xem [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
 ## Giới hạn (có chủ đích)
 

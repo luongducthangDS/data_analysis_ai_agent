@@ -1,61 +1,94 @@
 {
-  "timestamp": "2026-09-10T19:14:00",
+  "timestamp": "2026-09-10T20:49:27",
   "total": 100,
-  "passed": 97,
-  "avg_overall": 0.895,
+  "passed": 81,
+  "avg_overall": 0.826,
+  "avg_correctness": 0.747,
+  "n_correctness_checked": 53,
   "avg_no_meta": 0.96,
-  "avg_insight": 0.752,
-  "avg_concise": 0.938,
-  "avg_vn_natural": 0.98,
-  "avg_factual_ok": 0.84,
-  "avg_latency_ms": 75714,
+  "avg_insight": 0.722,
+  "avg_concise": 0.875,
+  "avg_vn_natural": 0.917,
+  "median_latency_ms": 4669,
+  "mean_latency_ms": 75714,
   "llm_usage_rate": 100.0,
   "http_errors": 0,
+  "weights": {
+    "hard": {
+      "no_meta": 0.16,
+      "insight": 0.22,
+      "concise": 0.1,
+      "vn_natural": 0.12,
+      "correctness": 0.4
+    },
+    "soft": {
+      "no_meta": 0.28,
+      "insight": 0.42,
+      "concise": 0.13,
+      "vn_natural": 0.17
+    }
+  },
   "by_category": {
     "aggregation": {
-      "avg": 0.857,
-      "passed": 37,
+      "avg": 0.803,
+      "passed": 31,
       "total": 39
     },
     "bot_info": {
-      "avg": 0.928,
-      "passed": 5,
+      "avg": 0.934,
+      "passed": 4,
       "total": 5
     },
     "comparison": {
-      "avg": 0.985,
+      "avg": 1.0,
       "passed": 4,
       "total": 4
     },
     "edge": {
-      "avg": 0.965,
+      "avg": 0.903,
       "passed": 12,
       "total": 12
     },
     "language": {
-      "avg": 0.81,
-      "passed": 5,
+      "avg": 0.526,
+      "passed": 1,
       "total": 5
     },
     "off_topic": {
-      "avg": 0.8,
+      "avg": 0.709,
       "passed": 4,
       "total": 5
     },
     "ranking": {
-      "avg": 0.93,
-      "passed": 26,
+      "avg": 0.858,
+      "passed": 21,
       "total": 26
     },
     "trend": {
-      "avg": 0.906,
+      "avg": 0.811,
       "passed": 4,
       "total": 4
     }
   },
   "failed_ids": [
+    31,
+    33,
+    34,
+    36,
     37,
+    38,
+    43,
     46,
-    81
+    47,
+    48,
+    60,
+    71,
+    72,
+    79,
+    81,
+    97,
+    98,
+    99,
+    100
   ]
 }

@@ -472,21 +472,20 @@ class APIClient:
         }
 
 
-# ── Scoring (LLM quality rubric) ──────────────────────────────────────────────
+# ── Scoring ───────────────────────────────────────────────────────────────────
 #
-# Thay vì test exact-match số/keyword (quá rigid với LLM output),
-# đánh giá theo 5 chiều chất lượng thực tế:
+# 5 chiều:
+#  correctness (0–1 | None) — CỨNG: số khớp GT (±2/10/30%) hoặc keyword khớp.
+#                             None khi câu không có đáp án đơn trị (off_topic, câu mở).
+#  no_meta     (0/1)  — không có chain-of-thought / meta-commentary leak
+#  insight     (0–1)  — có "so what" / hành động đề xuất, không chỉ đọc số
+#  concise     (0–1)  — 2–5 câu, đúng tầm
+#  vn_natural  (0–1)  — tiếng Việt tự nhiên, không robotic/English mix, không dump thô
 #
-#  no_meta    (0/1)   — không có chain-of-thought leak ra ngoài
-#  insight    (0–1)   — có "so what" / hành động đề xuất, không chỉ đọc số
-#  concise    (0–1)   — 2-5 câu, đúng tầm; không quá ngắn hoặc dài lê thê
-#  vn_natural (0–1)   — tiếng Việt tự nhiên, không robotic/English mix
-#  factual_ok (0–1)   — sanity check: không contradict ground truth hiển nhiên
-#
-# overall = no_meta×0.30 + insight×0.25 + concise×0.20 + vn_natural×0.15 + factual_ok×0.10
-#
-# Lý do weights này: meta-commentary leak là bug nghiêm trọng nhất (thiết kế prompt);
-# insight là giá trị cốt lõi LLM mang lại; factual chỉ sanity (đúng logic analysis).
+# overall: bộ trọng số HARD (có correctness) hoặc SOFT (không) — xem _W_HARD / _W_SOFT.
+# 3 chiều mềm (no_meta/insight/concise) là heuristic regex → đối chiếu bằng:
+#   - LLM-as-judge:  python tests/eval_100.py ... --judge
+#   - gold thủ công: python tests/eval_calibration.py   (Pearson r, MAE, agreement)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _VN_RE = re.compile(
@@ -537,6 +536,9 @@ def _parse_vn_number(text: str) -> list[float]:
     results = []
     # Pattern: số với optional dấu phẩy/chấm làm phân cách
     for raw in re.findall(r"-?\d[\d.,]*", text):
+        raw = raw.rstrip(".,")   # bỏ dấu câu cuối câu ("...là 8.950." → "8.950")
+        if not raw or raw in ("-",):
+            continue
         # Thử parse theo format Việt Nam: 1.234,56 → 1234.56
         if re.match(r"^\d{1,3}(\.\d{3})+(,\d+)?$", raw) and not raw.startswith("0."):
             # European: "1.234,56" hoặc "1.234"
@@ -597,9 +599,14 @@ def score_concise(answer: str) -> float:
     """
     Đúng độ dài: 40–500 chars lý tưởng (≈ 2-5 câu).
     Quá ngắn (< 20): chưa đủ. Quá dài (> 800): dài dòng.
+    Template "# Executive Data Brief" nhiều heading → không concise, bất kể độ dài hiển thị
+    (câu trả lời trong log có thể đã bị cắt).
     """
     if not answer:
         return 0.0
+    if re.search(r"#{1,3}\s*(Executive Data Brief|Kết quả phân tích|Xếp hạng)", answer) \
+            or len(re.findall(r"^#{1,4}\s", answer, re.M)) >= 2:
+        return 0.3
     n = len(answer.strip())
     if n < 20:
         return 0.1
@@ -622,28 +629,36 @@ def score_vn_natural(answer: str, llm_failed: bool) -> float:
         return 0.3 if has_vn else 0.1
     # Check xem có đổ raw JSON / SQL / DataFrame ra không
     has_dump = bool(re.search(r"\{.*:.*\}|\bSELECT\b|dtype|NaN|DataFrame", answer))
+    # Template "# Executive Data Brief / ## Kết quả / ### Xếp hạng" — không phải văn xuôi tự nhiên
+    is_template = bool(re.search(r"#{1,3}\s*(Executive Data Brief|Kết quả phân tích|Xếp hạng)", answer)) \
+        or len(re.findall(r"^#{1,4}\s", answer, re.M)) >= 2 \
+        or "Câu hỏi:" in answer[:60]
+    # Ký tự ngoài Latin/Việt (vd lẫn chữ Ả Rập do lỗi encode)
+    has_garbage = bool(re.search(r"[؀-ۿЀ-ӿ一-鿿]", answer))
     score = 1.0 if has_vn else 0.5
-    if has_dump:
+    if has_dump or is_template:
         score -= 0.4
+    if has_garbage:
+        score -= 0.3
     return max(0.0, round(score, 2))
 
 
-def score_factual_ok(tc: TestCase, answer: str, http_ok: bool) -> float:
+def score_correctness(tc: TestCase, answer: str, http_ok: bool) -> float | None:
     """
-    Sanity check lỏng: câu trả lời không contradict ground truth hiển nhiên.
-    - Nếu không có GT: 1.0 (không thể check)
-    - Nếu GT là số: kiểm tra xem answer có chứa số trong ballpark ±30% không
-    - Nếu GT là keyword: kiểm tra keyword (normalized) xuất hiện không
-    Không phạt partial miss — đây chỉ là safety net chống hallucinate nặng.
+    Kiểm tra CỨNG câu trả lời khớp ground truth. Trả None khi không kiểm được
+    (không có GT key, hoặc câu off_topic/bot_info/edge) → câu đó dùng bộ trọng số SOFT.
+
+    - số:     sai số tương đối ≤2% → 1.0 · ≤10% → 0.8 · ≤30% → 0.3 · còn lại 0.0
+              (trước đây ±30% cho luôn 1.0 — quá lỏng)
+    - keyword: khớp đủ token → 1.0 · khớp một phần → 0.5 · trật → 0.0
     """
-    if not http_ok or not answer:
-        return 0.0
-    # Off-topic: luôn ok nếu có substantive answer
     if tc.category in ("off_topic", "bot_info", "edge"):
-        return 1.0
+        return None
     gt = GROUND_TRUTH.get(tc.gt_key)
     if gt is None:
-        return 1.0   # không có GT → không check
+        return None
+    if not http_ok or not answer:
+        return 0.0
 
     def _norm(s: str) -> str:
         return unicodedata.normalize("NFKD", s).lower()
@@ -651,26 +666,94 @@ def score_factual_ok(tc: TestCase, answer: str, http_ok: bool) -> float:
     if tc.expected_type == "number":
         nums = _parse_vn_number(answer)
         if not nums:
-            return 0.5   # không thể verify → neutral
+            return 0.0   # hỏi số mà không nêu số nào → miss thật
         gt_f = float(gt)
-        # Pass nếu bất kỳ số nào trong answer nằm trong ±30% GT
-        for n in nums:
-            if gt_f == 0 and abs(n) < 1:
-                return 1.0
-            if gt_f != 0 and abs(n - gt_f) / abs(gt_f) <= 0.30:
-                return 1.0
-        # Fail nếu số sai hoàn toàn (order of magnitude khác)
+        if gt_f == 0:
+            return 1.0 if any(abs(n) < 1 for n in nums) else 0.0
+        # Câu tỉ lệ/margin: GT thường là phân số (0.203) còn model trả "20,3%".
+        # Chấp nhận cả hai dạng: thêm n/100 vào danh sách ứng viên khi |GT| < 1.
+        cand = list(nums)
+        if abs(gt_f) < 1:
+            cand += [n / 100 for n in nums]
+        best = min(abs(n - gt_f) / abs(gt_f) for n in cand)
+        if best <= 0.02:
+            return 1.0
+        if best <= 0.10:
+            return 0.8
+        if best <= 0.30:
+            return 0.3
         return 0.0
 
     if tc.expected_type == "keyword":
-        gt_str = str(gt)
-        gt_words = [w for w in gt_str.split() if len(w) > 2]
+        gt_words = [w for w in str(gt).split() if len(w) > 2]
         if not gt_words:
-            return 1.0
+            return None
         matches = sum(1 for w in gt_words if _norm(w) in _norm(answer))
         return 1.0 if matches >= len(gt_words) else (0.5 if matches > 0 else 0.0)
 
-    return 1.0   # "any" / "none" → không check factual
+    return None   # "any" / "none" → không kiểm cứng
+
+
+# ── LLM-as-judge (đối chiếu với heuristic) ────────────────────────────────────
+_JUDGE_PROMPT = """Bạn là giám khảo đánh giá câu trả lời của một trợ lý phân tích dữ liệu.
+Chấm câu trả lời dưới đây theo 3 tiêu chí, mỗi tiêu chí một số thực 0.0–1.0:
+
+- insight: câu trả lời có nêu "so what" (ý nghĩa, so sánh, hành động đề xuất) hay chỉ đọc lại con số?
+           Với câu hỏi ngoài phạm vi / hỏi về bot: cho 1.0 nếu từ chối/điều hướng hợp lý.
+- concise: độ dài hợp lý (2–5 câu), không cụt lủn, không lan man.
+- vn_natural: tiếng Việt tự nhiên, không lẫn tiếng Anh thô, không đổ JSON/bảng thô.
+
+Câu hỏi: {question}
+Câu trả lời: {answer}
+
+CHỈ trả JSON: {{"insight": 0.0, "concise": 0.0, "vn_natural": 0.0}}"""
+
+
+def build_judge_client():
+    """LLM client cho judge — dùng lại failover chain của backend."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from backend.app.services.llm_service import get_llm_client
+    return get_llm_client()
+
+
+def _parse_judge(raw: str) -> dict:
+    """Rút 3 điểm từ output judge — chịu được ```json fence, text thừa, hoặc dạng 'insight: 0.8'."""
+    out: dict[str, float] = {}
+    m = re.search(r"\{[^{}]*\}", raw)
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            for k in ("insight", "concise", "vn_natural"):
+                if k in d:
+                    out[k] = max(0.0, min(1.0, float(d[k])))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    if len(out) < 3:  # fallback: "insight": 0.8 / insight = 0.8
+        for k in ("insight", "concise", "vn_natural"):
+            mm = re.search(rf'["\']?{k}["\']?\s*[:=]\s*(-?\d*\.?\d+)', raw)
+            if mm:
+                out[k] = max(0.0, min(1.0, float(mm.group(1))))
+    return out
+
+
+def judge_scores(client, tc: "TestCase", answer: str) -> dict:
+    """Gọi LLM chấm 3 chiều mềm. Lỗi/parse fail → trả {} (bỏ qua, không phá run)."""
+    try:
+        raw = client.generate(
+            _JUDGE_PROMPT.format(question=tc.question, answer=answer[:1500]),
+            max_tokens=150, temperature=0.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _JUDGE_ERRORS.append(f"[{tc.id}] call {type(exc).__name__}: {str(exc)[:120]}")
+        return {}
+    d = _parse_judge(raw or "")
+    if not d:
+        _JUDGE_ERRORS.append(f"[{tc.id}] parse-fail: {raw[:120]!r}")
+    return d
+
+
+_JUDGE_ERRORS: list[str] = []
 
 
 # ── Result dataclass ──────────────────────────────────────────────────────────
@@ -684,32 +767,64 @@ class EvalResult:
     latency_ms: float
     http_status: int
     llm_failed: bool
-    # 5 quality dimensions
-    no_meta: float       # không có meta-commentary leak
-    insight: float       # có actionable insight
-    concise: float       # độ dài phù hợp
-    vn_natural: float    # tiếng Việt tự nhiên
-    factual_ok: float    # không contradict ground truth
+    # quality dimensions
+    no_meta: float             # không có meta-commentary leak
+    insight: float             # có actionable insight
+    concise: float             # độ dài phù hợp
+    vn_natural: float          # tiếng Việt tự nhiên
+    correctness: float | None  # khớp ground truth (số ±10% / keyword) — None nếu câu không có GT
     overall: float = field(init=False)
+    judge_insight: float | None = None   # điểm LLM-as-judge (khi chạy --judge), để đối chiếu heuristic
+    judge_concise: float | None = None
+    judge_vn: float | None = None
     error: str = ""
 
     def __post_init__(self):
-        self.overall = round(
-            self.no_meta    * 0.30
-            + self.insight  * 0.25
-            + self.concise  * 0.20
-            + self.vn_natural * 0.15
-            + self.factual_ok * 0.10,
-            3,
-        )
+        self.overall = round(compute_overall(
+            self.no_meta, self.insight, self.concise, self.vn_natural, self.correctness
+        ), 3)
+
+
+# Hai bộ trọng số: HARD khi câu có ground truth kiểm được, SOFT khi không (off_topic, bot_info,
+# câu mở không có đáp án đơn trị). Mỗi bộ tổng = 1.0.
+#   correctness lên 0.40 (trước factual_ok chỉ 0.10) — đúng/sai số là ưu tiên số 1.
+#   no_meta xuống 0.16 (trước 0.30) — đây là prompt-quality check, không phải answer-quality.
+_W_HARD = {"no_meta": 0.16, "insight": 0.22, "concise": 0.10, "vn_natural": 0.12, "correctness": 0.40}
+_W_SOFT = {"no_meta": 0.28, "insight": 0.42, "concise": 0.13, "vn_natural": 0.17}
+
+
+def compute_overall(no_meta, insight, concise, vn_natural, correctness) -> float:
+    if correctness is None:
+        w = _W_SOFT
+        return (no_meta * w["no_meta"] + insight * w["insight"]
+                + concise * w["concise"] + vn_natural * w["vn_natural"])
+    w = _W_HARD
+    return (no_meta * w["no_meta"] + insight * w["insight"] + concise * w["concise"]
+            + vn_natural * w["vn_natural"] + correctness * w["correctness"])
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
+def _score_all(tc: TestCase, answer: str, http_ok: bool, llm_fail: bool) -> dict:
+    """Chấm toàn bộ chiều heuristic cho 1 câu trả lời (tách ra để --rescore dùng lại)."""
+    return dict(
+        no_meta=score_no_meta(answer),
+        insight=score_insight(tc, answer),
+        concise=score_concise(answer),
+        vn_natural=score_vn_natural(answer, llm_failed=llm_fail),
+        correctness=score_correctness(tc, answer, http_ok),
+    )
+
+
+def _fmt_corr(c: float | None) -> str:
+    return "n/a " if c is None else f"{c:.2f}"
+
+
 def run_eval(
     client: APIClient,
     cases: list[TestCase],
     verbose: bool = True,
     delay: float = 0.0,
+    judge_client=None,
 ) -> list[EvalResult]:
     results: list[EvalResult] = []
 
@@ -729,7 +844,7 @@ def run_eval(
                 id=tc.id, dataset=tc.dataset, category=tc.category,
                 question=tc.question, answer="", latency_ms=0,
                 http_status=0, llm_failed=False,
-                no_meta=0, insight=0, concise=0, vn_natural=0, factual_ok=0,
+                no_meta=0, insight=0, concise=0, vn_natural=0, correctness=0.0,
                 error=f"Upload lỗi: {e}",
             ))
             continue
@@ -745,7 +860,7 @@ def run_eval(
                 id=tc.id, dataset=tc.dataset, category=tc.category,
                 question=tc.question, answer="", latency_ms=latency_ms,
                 http_status=0, llm_failed=False,
-                no_meta=0, insight=0, concise=0, vn_natural=0, factual_ok=0,
+                no_meta=0, insight=0, concise=0, vn_natural=0, correctness=0.0,
                 error=f"Request lỗi: {e}",
             ))
             continue
@@ -755,27 +870,28 @@ def run_eval(
         answer   = body.get("answer", "") if http_ok else ""
         llm_fail = bool(body.get("llm_synthesis_failed", False))
 
-        nm   = score_no_meta(answer)
-        ins  = score_insight(tc, answer)
-        con  = score_concise(answer)
-        vn   = score_vn_natural(answer, llm_failed=llm_fail)
-        fok  = score_factual_ok(tc, answer, http_ok)
+        s = _score_all(tc, answer, http_ok, llm_fail)
+        judge = judge_scores(judge_client, tc, answer) if (judge_client and answer) else {}
 
         r = EvalResult(
             id=tc.id, dataset=tc.dataset, category=tc.category,
             question=tc.question,
-            answer=answer[:300] if answer else f"HTTP {resp['status']}: {resp['text'][:100]}",
+            answer=answer[:2000] if answer else f"HTTP {resp['status']}: {resp['text'][:100]}",
             latency_ms=latency_ms,
             http_status=resp["status"],
             llm_failed=llm_fail,
-            no_meta=nm, insight=ins, concise=con, vn_natural=vn, factual_ok=fok,
+            **s,
+            judge_insight=judge.get("insight"),
+            judge_concise=judge.get("concise"),
+            judge_vn=judge.get("vn_natural"),
             error="",
         )
         results.append(r)
 
         if verbose:
             icon = "✅" if r.overall >= 0.7 else ("⚠️" if r.overall >= 0.4 else "❌")
-            dims = f"meta={nm:.0f} ins={ins:.2f} con={con:.2f} vn={vn:.2f} fok={fok:.2f}"
+            dims = (f"meta={s['no_meta']:.0f} ins={s['insight']:.2f} con={s['concise']:.2f} "
+                    f"vn={s['vn_natural']:.2f} corr={_fmt_corr(s['correctness'])}")
             print(f"      {icon} overall={r.overall:.2f} | {dims} | {latency_ms:.0f}ms | llm_fallback={llm_fail}")
             print(f"      → {answer[:130]!r}")
 
@@ -803,14 +919,15 @@ def save_html(results: list[EvalResult], path: Path) -> None:
     llm_fail = sum(r.llm_failed for r in results)
 
     def _avg(attr: str) -> float:
-        return round(sum(getattr(r, attr) for r in results) / max(total, 1), 2)
+        vals = [getattr(r, attr) for r in results if getattr(r, attr) is not None]
+        return round(sum(vals) / max(len(vals), 1), 2)
 
     # Per-dimension averages
     avg_meta = _avg("no_meta")
     avg_ins  = _avg("insight")
     avg_con  = _avg("concise")
     avg_vn   = _avg("vn_natural")
-    avg_fok  = _avg("factual_ok")
+    avg_fok  = _avg("correctness")
 
     # Per-category summary
     cat_stats: dict[str, list] = defaultdict(list)
@@ -853,7 +970,7 @@ def save_html(results: list[EvalResult], path: Path) -> None:
         f"<td>{r.insight:.2f}</td>"
         f"<td>{r.concise:.2f}</td>"
         f"<td>{r.vn_natural:.2f}</td>"
-        f"<td>{r.factual_ok:.2f}</td>"
+        f"<td>{'n/a' if r.correctness is None else format(r.correctness, '.2f')}</td>"
         f"<td><b>{r.overall:.2f}</b></td>"
         f"<td>{r.latency_ms:.0f}</td>"
         f"<td>{'⚠️' if r.llm_failed else ''}</td>"
@@ -914,11 +1031,11 @@ def save_html(results: list[EvalResult], path: Path) -> None:
 
 <h2>Quality Dimensions (avg)</h2>
 <div class="dim-grid">
-  <div class="dim"><div class="dval" style="color:#059669">{avg_meta:.2f}</div><div class="dlbl">no_meta ×0.30<br><small>Không leak chain-of-thought</small></div></div>
-  <div class="dim"><div class="dval" style="color:#7c3aed">{avg_ins:.2f}</div><div class="dlbl">insight ×0.25<br><small>Có insight / khuyến nghị</small></div></div>
-  <div class="dim"><div class="dval" style="color:#d97706">{avg_con:.2f}</div><div class="dlbl">concise ×0.20<br><small>Đủ ngắn gọn</small></div></div>
-  <div class="dim"><div class="dval" style="color:#0891b2">{avg_vn:.2f}</div><div class="dlbl">vn_natural ×0.15<br><small>Tiếng Việt tự nhiên</small></div></div>
-  <div class="dim"><div class="dval" style="color:#dc2626">{avg_fok:.2f}</div><div class="dlbl">factual_ok ×0.10<br><small>Số không lệch ±30%</small></div></div>
+  <div class="dim"><div class="dval" style="color:#dc2626">{avg_fok:.2f}</div><div class="dlbl">correctness (HARD ×0.40)<br><small>Số ±10% / keyword khớp GT</small></div></div>
+  <div class="dim"><div class="dval" style="color:#059669">{avg_meta:.2f}</div><div class="dlbl">no_meta<br><small>Không leak chain-of-thought</small></div></div>
+  <div class="dim"><div class="dval" style="color:#7c3aed">{avg_ins:.2f}</div><div class="dlbl">insight<br><small>Có insight / khuyến nghị</small></div></div>
+  <div class="dim"><div class="dval" style="color:#d97706">{avg_con:.2f}</div><div class="dlbl">concise<br><small>Đủ ngắn gọn</small></div></div>
+  <div class="dim"><div class="dval" style="color:#0891b2">{avg_vn:.2f}</div><div class="dlbl">vn_natural<br><small>Tiếng Việt tự nhiên</small></div></div>
 </div>
 
 <h2>Theo Category</h2>
@@ -937,15 +1054,16 @@ def save_html(results: list[EvalResult], path: Path) -> None:
 <table>
   <tr>
     <th>#</th><th>Category</th><th>Dataset</th><th>Câu hỏi</th><th>Câu trả lời</th>
-    <th>Meta</th><th>Insight</th><th>Concise</th><th>VN</th><th>Factual</th>
+    <th>Meta</th><th>Insight</th><th>Concise</th><th>VN</th><th>Correct</th>
     <th>Overall</th><th>ms</th><th>LLM↓</th><th>Error</th>
   </tr>
   {detail_rows}
 </table>
 
 <p class="note">
-  Scoring: overall = no_meta×0.30 + insight×0.25 + concise×0.20 + vn_natural×0.15 + factual_ok×0.10<br>
-  Meta: không có "TRƯỚC TIÊN / Dựa trên dữ liệu / tôi sẽ tính" leak. Insight: signal "cho thấy / đề xuất / cần chú ý". Concise: 40–500 ký tự. VN: dùng dấu tiếng Việt. Factual: số không lệch ±30% ground truth.
+  overall = bộ trọng số HARD (có correctness: {_W_HARD}) hoặc SOFT (không: {_W_SOFT}).<br>
+  correctness: số lệch ≤2%→1.0, ≤10%→0.8, ≤30%→0.3, còn lại 0.0; keyword khớp đủ→1.0. "n/a" = câu không có đáp án đơn trị.<br>
+  no_meta / insight / concise / vn_natural là heuristic regex — đối chiếu bằng --judge và tests/eval_calibration.py.
 </p>
 </body>
 </html>"""
@@ -954,23 +1072,84 @@ def save_html(results: list[EvalResult], path: Path) -> None:
     print(f"[HTML] {path}")
 
 
+def _mean(xs: list[float]) -> float:
+    xs = [x for x in xs if x is not None]
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+def pearson(xs: list[float], ys: list[float]) -> float | None:
+    """Hệ số tương quan Pearson. None nếu <3 điểm hoặc một phía không đổi."""
+    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None]
+    n = len(pairs)
+    if n < 3:
+        return None
+    mx = sum(p[0] for p in pairs) / n
+    my = sum(p[1] for p in pairs) / n
+    sxy = sum((x - mx) * (y - my) for x, y in pairs)
+    sxx = sum((x - mx) ** 2 for x, _ in pairs)
+    syy = sum((y - my) ** 2 for _, y in pairs)
+    if sxx == 0 or syy == 0:
+        return None
+    return sxy / (sxx * syy) ** 0.5
+
+
+def _agreement_row(name: str, heur: list[float], other: list[float]) -> str:
+    pairs = [(h, o) for h, o in zip(heur, other) if h is not None and o is not None]
+    if not pairs:
+        return f"    {name:<12} (không có dữ liệu)"
+    mae = sum(abs(h - o) for h, o in pairs) / len(pairs)
+    agree = sum(1 for h, o in pairs if abs(h - o) <= 0.25) / len(pairs)
+    r = pearson([p[0] for p in pairs], [p[1] for p in pairs])
+    r_txt = "n/a " if r is None else f"{r:+.2f}"
+    return f"    {name:<12} n={len(pairs):<3} MAE={mae:.3f}  agree≤0.25={agree*100:.0f}%  r={r_txt}"
+
+
+def _judge_stats(heur: list, other: list) -> dict:
+    pairs = [(h, o) for h, o in zip(heur, other) if h is not None and o is not None]
+    if not pairs:
+        return {"n": 0}
+    mae = sum(abs(h - o) for h, o in pairs) / len(pairs)
+    agree = sum(1 for h, o in pairs if abs(h - o) <= 0.25) / len(pairs)
+    r = pearson([p[0] for p in pairs], [p[1] for p in pairs])
+    return {"n": len(pairs), "mae": round(mae, 3),
+            "agreement_0.25": round(agree, 3),
+            "pearson_r": None if r is None else round(r, 3)}
+
+
+def _print_judge_agreement(results: list[EvalResult]) -> None:
+    print("\n  Heuristic vs LLM-judge (chiều mềm):")
+    print(_agreement_row("insight",    [r.insight for r in results],    [r.judge_insight for r in results]))
+    print(_agreement_row("concise",    [r.concise for r in results],    [r.judge_concise for r in results]))
+    print(_agreement_row("vn_natural", [r.vn_natural for r in results], [r.judge_vn for r in results]))
+    if _JUDGE_ERRORS:
+        print(f"    ({len(_JUDGE_ERRORS)} câu judge lỗi/parse-fail — bỏ qua)")
+
+
+def _median(xs: list[float]) -> float:
+    xs = sorted(x for x in xs if x is not None)
+    return xs[len(xs) // 2] if xs else 0.0
+
+
 def print_summary(results: list[EvalResult]) -> None:
     from collections import defaultdict
     total  = len(results)
     passed = sum(1 for r in results if r.overall >= 0.7)
+    n_corr = sum(1 for r in results if r.correctness is not None)
     print("\n" + "="*70)
     print(f"  TỔNG KẾT: {passed}/{total} pass ({passed/total*100:.1f}%)")
-    print(f"  Avg no_meta     : {sum(r.no_meta for r in results)/total:.3f}  (×0.30)")
-    print(f"  Avg insight     : {sum(r.insight for r in results)/total:.3f}  (×0.25)")
-    print(f"  Avg concise     : {sum(r.concise for r in results)/total:.3f}  (×0.20)")
-    print(f"  Avg vn_natural  : {sum(r.vn_natural for r in results)/total:.3f}  (×0.15)")
-    print(f"  Avg factual_ok  : {sum(r.factual_ok for r in results)/total:.3f}  (×0.10)")
-    print(f"  Avg overall     : {sum(r.overall for r in results)/total:.3f}")
-    print(f"  Avg latency     : {sum(r.latency_ms for r in results)/total:.0f}ms")
+    print(f"  Avg correctness : {_mean([r.correctness for r in results]):.3f}  ({n_corr}/{total} câu kiểm được, HARD ×0.40)")
+    print(f"  Avg no_meta     : {_mean([r.no_meta for r in results]):.3f}")
+    print(f"  Avg insight     : {_mean([r.insight for r in results]):.3f}")
+    print(f"  Avg concise     : {_mean([r.concise for r in results]):.3f}")
+    print(f"  Avg vn_natural  : {_mean([r.vn_natural for r in results]):.3f}")
+    print(f"  Avg overall     : {_mean([r.overall for r in results]):.3f}")
+    print(f"  Latency         : median {_median([r.latency_ms for r in results]):.0f}ms · mean {_mean([r.latency_ms for r in results]):.0f}ms")
     llm_fail_count = sum(r.llm_failed for r in results)
     llm_usage_pct = round((total - llm_fail_count) / total * 100, 1)
     print(f"  LLM usage rate  : {llm_usage_pct}%  ({llm_fail_count}/{total} fallback to rule-based)")
     print(f"  HTTP errors     : {sum(1 for r in results if r.http_status not in (200, 0))}")
+    if any(r.judge_insight is not None for r in results):
+        _print_judge_agreement(results)
 
     print("\n  By category:")
     cat_stats: dict[str, list] = defaultdict(list)
@@ -993,19 +1172,22 @@ def build_summary(results: list[EvalResult]) -> dict[str, Any]:
     cat_stats: dict[str, list[float]] = defaultdict(list)
     for r in results:
         cat_stats[r.category].append(r.overall)
-    return {
+    out = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "total": total,
         "passed": sum(1 for r in results if r.overall >= 0.7),
-        "avg_overall": round(sum(r.overall for r in results) / total, 3),
-        "avg_no_meta": round(sum(r.no_meta for r in results) / total, 3),
-        "avg_insight": round(sum(r.insight for r in results) / total, 3),
-        "avg_concise": round(sum(r.concise for r in results) / total, 3),
-        "avg_vn_natural": round(sum(r.vn_natural for r in results) / total, 3),
-        "avg_factual_ok": round(sum(r.factual_ok for r in results) / total, 3),
-        "avg_latency_ms": round(sum(r.latency_ms for r in results) / total),
+        "avg_overall": round(_mean([r.overall for r in results]), 3),
+        "avg_correctness": round(_mean([r.correctness for r in results]), 3),
+        "n_correctness_checked": sum(1 for r in results if r.correctness is not None),
+        "avg_no_meta": round(_mean([r.no_meta for r in results]), 3),
+        "avg_insight": round(_mean([r.insight for r in results]), 3),
+        "avg_concise": round(_mean([r.concise for r in results]), 3),
+        "avg_vn_natural": round(_mean([r.vn_natural for r in results]), 3),
+        "median_latency_ms": round(_median([r.latency_ms for r in results])),
+        "mean_latency_ms": round(_mean([r.latency_ms for r in results])),
         "llm_usage_rate": round((total - sum(r.llm_failed for r in results)) / total * 100, 1),
         "http_errors": sum(1 for r in results if r.http_status not in (200, 0)),
+        "weights": {"hard": _W_HARD, "soft": _W_SOFT},
         "by_category": {
             cat: {"avg": round(sum(v) / len(v), 3),
                   "passed": sum(1 for x in v if x >= 0.7),
@@ -1014,11 +1196,86 @@ def build_summary(results: list[EvalResult]) -> dict[str, Any]:
         },
         "failed_ids": [r.id for r in results if r.overall < 0.7],
     }
+    if any(r.judge_insight is not None for r in results):
+        out["judge_vs_heuristic"] = {
+            dim: _judge_stats([getattr(r, h) for r in results], [getattr(r, j) for r in results])
+            for dim, h, j in [("insight", "insight", "judge_insight"),
+                              ("concise", "concise", "judge_concise"),
+                              ("vn_natural", "vn_natural", "judge_vn")]
+        }
+    return out
 
 
 def save_summary_json(results: list[EvalResult], path: Path) -> None:
     path.write_text(json.dumps(build_summary(results), ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  → {path}")
+
+
+def rescore_from_csv(path: Path, ids: set[int] | None = None, judge_client=None) -> list[EvalResult]:
+    """Chấm lại kết quả cũ bằng bộ scoring hiện tại — KHÔNG cần server (miễn phí, không tốn quota).
+    judge_client != None → gọi thêm LLM-as-judge trên chính các câu trả lời đã lưu."""
+    by_id = {tc.id: tc for tc in TEST_CASES}
+    out: list[EvalResult] = []
+    with open(path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tc = by_id.get(int(row["id"]))
+            if tc is None or (ids is not None and tc.id not in ids):
+                continue
+            answer = row.get("answer", "") or ""
+            err = row.get("error", "") or ""
+            http_status = int(row.get("http_status") or 0)
+            llm_fail = str(row.get("llm_failed", "")).lower() in ("true", "1")
+            is_fail = bool(err) or answer.startswith("HTTP ")
+            if is_fail:
+                s = dict(no_meta=0.0, insight=0.0, concise=0.0, vn_natural=0.0, correctness=0.0)
+            else:
+                s = _score_all(tc, answer, http_ok=(http_status == 200), llm_fail=llm_fail)
+
+            def _f(k):
+                v = row.get(k)
+                return None if v in (None, "", "None") else float(v)
+
+            judge = judge_scores(judge_client, tc, answer) if (judge_client and answer and not is_fail) else {}
+
+            out.append(EvalResult(
+                id=tc.id, dataset=tc.dataset, category=tc.category, question=tc.question,
+                answer=answer, latency_ms=float(row.get("latency_ms") or 0),
+                http_status=http_status, llm_failed=llm_fail, **s,
+                judge_insight=judge.get("insight", _f("judge_insight")),
+                judge_concise=judge.get("concise", _f("judge_concise")),
+                judge_vn=judge.get("vn_natural", _f("judge_vn")), error=err,
+            ))
+    return out
+
+
+def print_regression(baseline_path: Path, results: list[EvalResult]) -> None:
+    base = json.loads(baseline_path.read_text(encoding="utf-8"))
+    cur = build_summary(results)
+    print("\n  Regression vs baseline (" + base.get("timestamp", "?") + "):")
+
+    def _d(label, key, pct=False):
+        b, c = base.get(key), cur.get(key)
+        if b is None or c is None:
+            return
+        delta = c - b
+        arrow = "→" if abs(delta) < (0.5 if pct else 0.005) else ("▲" if delta > 0 else "▼")
+        unit = "%" if pct else ""
+        print(f"    {label:<16} {b:>8.3f}{unit} → {c:>8.3f}{unit}  {arrow} {delta:+.3f}{unit}")
+
+    _d("pass", "passed")
+    _d("avg_overall", "avg_overall")
+    _d("avg_correctness", "avg_correctness")
+    _d("avg_insight", "avg_insight")
+    _d("avg_no_meta", "avg_no_meta")
+    _d("median_latency", "median_latency_ms")
+    regressed = set(base.get("failed_ids", [])) ^ set(cur.get("failed_ids", []))
+    if regressed:
+        newly = sorted(set(cur.get("failed_ids", [])) - set(base.get("failed_ids", [])))
+        fixed = sorted(set(base.get("failed_ids", [])) - set(cur.get("failed_ids", [])))
+        if newly:
+            print(f"    ❌ fail mới: {newly}")
+        if fixed:
+            print(f"    ✅ đã fix : {fixed}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1043,30 +1300,57 @@ def main() -> None:
     parser.add_argument("--no-report", action="store_true",   help="Không tạo file báo cáo")
     parser.add_argument("--quiet",    action="store_true",    help="Ít log hơn")
     parser.add_argument("--delay",    type=float, default=0.0, help="Giãn cách giữa các request (giây) — tránh rate-limit LLM free tier")
+    parser.add_argument("--rescore",  default="",             help="Chấm lại 1 file results.csv cũ bằng scoring hiện tại (không cần server)")
+    parser.add_argument("--judge",    action="store_true",     help="Bật LLM-as-judge cho 3 chiều mềm (tốn thêm 1 LLM call / câu)")
+    parser.add_argument("--baseline", default="",              help="File summary.json để so regression")
     args = parser.parse_args()
 
     print(f"Loading ground truths from datasets...")
     _load_ground_truths()
     print(f"Loaded {len(GROUND_TRUTH)} ground truth values\n")
 
-    client = APIClient(args.base_url)
-    if not client.health_check():
-        print(f"[ERROR] Server không phản hồi tại {args.base_url}")
-        print("  Hãy chạy: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000")
-        sys.exit(1)
-    print(f"[OK] Server sẵn sàng tại {args.base_url}\n")
+    if args.rescore:
+        print(f"[RESCORE] {args.rescore} — chấm lại bằng scoring hiện tại (không gọi server)\n")
+        jc = None
+        if args.judge:
+            try:
+                jc = build_judge_client()
+                print("[OK] LLM-as-judge bật (chấm lại trên câu trả lời đã lưu)\n")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[WARN] Không khởi tạo được judge client ({exc})\n")
+        ids = parse_ids(args.ids) if args.ids else None
+        results = rescore_from_csv(Path(args.rescore), ids=ids, judge_client=jc)
+    else:
+        client = APIClient(args.base_url)
+        if not client.health_check():
+            print(f"[ERROR] Server không phản hồi tại {args.base_url}")
+            print("  Hãy chạy: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000")
+            sys.exit(1)
+        print(f"[OK] Server sẵn sàng tại {args.base_url}\n")
 
-    # Filter test cases
-    cases = TEST_CASES
-    if args.ids:
-        target_ids = parse_ids(args.ids)
-        cases = [tc for tc in cases if tc.id in target_ids]
-    if args.dataset:
-        cases = [tc for tc in cases if tc.dataset == args.dataset]
-    print(f"Chạy {len(cases)} test cases...\n")
+        judge_client = None
+        if args.judge:
+            try:
+                judge_client = build_judge_client()
+                print("[OK] LLM-as-judge bật\n")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[WARN] Không khởi tạo được judge client ({exc}) — bỏ qua --judge\n")
 
-    results = run_eval(client, cases, verbose=not args.quiet, delay=args.delay)
+        # Filter test cases
+        cases = TEST_CASES
+        if args.ids:
+            target_ids = parse_ids(args.ids)
+            cases = [tc for tc in cases if tc.id in target_ids]
+        if args.dataset:
+            cases = [tc for tc in cases if tc.dataset == args.dataset]
+        print(f"Chạy {len(cases)} test cases...\n")
+
+        results = run_eval(client, cases, verbose=not args.quiet, delay=args.delay,
+                           judge_client=judge_client)
+
     print_summary(results)
+    if args.baseline:
+        print_regression(Path(args.baseline), results)
 
     if not args.no_report and results:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

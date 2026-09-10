@@ -1,0 +1,17 @@
+==============================================================
+  CALIBRATION — heuristic vs 30 nhãn tay
+==============================================================
+  chiều          n     MAE   agree≤0.25   Pearson r
+  insight       30   0.282         60%       +0.14
+  concise       30   0.122         83%       +0.81
+  vn_natural    30   0.033        100%       +0.93
+==============================================================
+
+  Lệch lớn (|Δ| > 0.4):
+    # 33 insight     heuristic=1.00 gold=0.25  | Segment nào có tổng doanh thu cao nhất?
+    # 44 concise     heuristic=1.00 gold=0.25  | Profit margin trung bình của từng Segment là 
+    # 79 insight     heuristic=1.00 gold=0.00  | Tool này có thể vẽ biểu đồ không?
+    # 81 insight     heuristic=0.30 gold=0.75  | Thủ đô của nước Pháp là đâu?
+    # 84 concise     heuristic=1.00 gold=0.25  | Dạy tôi cách nấu món phở bò truyền thống
+    # 88 insight     heuristic=1.00 gold=0.25  | So sánh doanh thu năm nay với năm ngoái (nếu 
+    # 92 insight     heuristic=1.00 gold=0.25  | Tại sao doanh thu tháng 3 lại thấp?

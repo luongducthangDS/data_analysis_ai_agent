@@ -1,78 +1,117 @@
-# Evaluation — baseline 100 câu
+# Evaluation
 
-Bộ eval end-to-end: `tests/eval_100.py` upload 6 dataset trong `data/samples/`, hỏi 100 câu
-qua API thật, chấm câu trả lời với **ground truth tính bằng pandas** (không fit theo output model).
+Harness end-to-end: `tests/eval_100.py` upload 6 dataset trong `data/samples/`, hỏi 100 câu
+qua API thật, chấm câu trả lời với **ground truth tính bằng pandas tại chỗ** (không fit theo output model).
 
-- Ground truth build tại chỗ từ chính file dataset → thay dataset là ground truth đổi theo.
-- 5 chiều chất lượng, trọng số: `no_meta` 0.30 · `insight` 0.25 · `concise` 0.20 · `vn_natural` 0.15 · `factual_ok` 0.10.
-- `overall >= 0.70` tính là pass.
+## Scoring
 
-## Kết quả run baseline
+5 chiều. `overall` = tổng có trọng số; 2 bộ trọng số tuỳ câu có kiểm cứng được hay không:
+
+| chiều | ý nghĩa | trọng số HARD | trọng số SOFT |
+|---|---|---|---|
+| **correctness** | số khớp GT: lệch ≤2%→1.0 · ≤10%→0.8 · ≤30%→0.3 · còn lại 0.0. keyword khớp đủ→1.0 | **0.40** | — (n/a) |
+| insight | có "so what" / khuyến nghị, không chỉ đọc số | 0.22 | 0.42 |
+| no_meta | không leak chain-of-thought / meta-commentary | 0.16 | 0.28 |
+| vn_natural | tiếng Việt tự nhiên, không dump JSON/markdown/bảng thô | 0.12 | 0.17 |
+| concise | 2–5 câu, không cụt, không lan man | 0.10 | 0.13 |
+
+- **HARD**: câu có ground-truth đơn trị (53/100). **SOFT**: câu mở / off_topic / bot_info (47/100) — `correctness` không áp dụng.
+- `correctness` là chiều **cứng** (đối chiếu số bằng pandas). 3 chiều `insight` / `no_meta` / `concise` là **heuristic regex** → đã calibrate, xem bên dưới.
+- `overall ≥ 0.70` = pass.
+
+## Kết quả baseline
+
+Run 2026-09-10, Gemini `flash-lite → flash` (failover chain, free tier). Chi tiết:
+[`eval-baseline/summary.json`](eval-baseline/summary.json) · [`eval-baseline/results.csv`](eval-baseline/results.csv).
 
 | | |
 |---|---|
-| Ngày chạy | 2026-09-10 |
-| Model | Gemini `flash-lite` -> `flash` (failover chain, free tier) |
-| Pass | **97 / 100** (`overall >= 0.70`) |
-| Avg overall | **0.895** |
-| LLM usage | 100% (0 câu rơi rule-based fallback) |
+| Pass | **81 / 100** |
+| Avg overall | **0.826** |
+| Avg correctness | **0.747** (53 câu kiểm cứng) |
+| Avg insight / no_meta / concise / vn_natural | 0.72 / 0.96 / 0.88 / 0.92 |
+| Fallback rule-based | **0 / 100** |
 | HTTP 5xx | 0 |
-| Latency — median | **~4.7 s** / request |
-| Latency — mean | 75 s (bị kéo lệch bởi retry storm khi free tier trả 429 — xem ghi chú) |
+| Latency median | **~4.7 s** (mean 75 s bị kéo lệch bởi retry storm 429 — xem ghi chú) |
 
-Số liệu chi tiết: [`eval-baseline/summary.json`](eval-baseline/summary.json) · từng câu: [`eval-baseline/results.csv`](eval-baseline/results.csv).
+> Phiên bản scoring đầu tiên cho 97/100 vì `factual_ok` chỉ ±30% và weight 0.10.
+> Siết `correctness` xuống ±10% + weight 0.40 → 81/100. Con số thấp hơn nhưng phản ánh đúng
+> chất lượng (xem "Bug agent" bên dưới).
+
+### Theo dataset — lộ rõ điểm yếu
+
+| dataset | câu | pass | avg overall |
+|---|---|---|---|
+| sales_data | 27 | 24/27 | 0.89 |
+| expense_claims | 11 | 11/11 | 0.90 |
+| sales_sample | 24 | 21/24 | 0.87 |
+| viet_relational | 6 | 4/6 | 0.79 |
+| general_ledger | 16 | 12/16 | 0.74 |
+| **financial_sample** | 16 | **9/16** | **0.70** |
 
 ### Theo nhóm câu hỏi
 
-| Nhóm | Số câu | Pass | Avg overall |
+| nhóm | câu | pass | avg |
 |---|---|---|---|
-| aggregation | 39 | 37/39 | 0.857 |
-| ranking | 26 | 26/26 | 0.930 |
-| edge | 12 | 12/12 | 0.965 |
-| bot_info | 5 | 5/5 | 0.928 |
-| language | 5 | 5/5 | 0.810 |
-| off_topic | 5 | 4/5 | 0.800 |
-| comparison | 4 | 4/4 | 0.985 |
-| trend | 4 | 4/4 | 0.906 |
+| comparison | 4 | 4/4 | 1.00 |
+| bot_info | 5 | 4/5 | 0.93 |
+| edge | 12 | 12/12 | 0.90 |
+| ranking | 26 | 21/26 | 0.86 |
+| trend | 4 | 4/4 | 0.81 |
+| aggregation | 39 | 31/39 | 0.80 |
+| off_topic | 5 | 4/5 | 0.71 |
+| **language** (câu hỏi kiểu chat) | 5 | **1/5** | **0.53** |
 
-### Chiều chất lượng (trung bình)
+## Calibration — heuristic có đáng tin không?
 
-| no_meta | insight | concise | vn_natural | factual_ok |
+`tests/eval_calibration.py`: 30 câu trả lời thật, gán nhãn tay 3 chiều mềm, so với heuristic.
+Kết quả ([`eval-baseline/calibration.txt`](eval-baseline/calibration.txt)):
+
+| chiều | MAE | agreement (Δ ≤ 0.25) | Pearson r | kết luận |
 |---|---|---|---|---|
-| 0.960 | 0.752 | 0.938 | 0.980 | 0.840 |
+| vn_natural | 0.03 | 100% | **+0.93** | tin được |
+| concise | 0.12 | 83% | **+0.81** | tin được (sau khi thêm bắt template dump) |
+| **insight** | 0.28 | 60% | **+0.14** | **không tin được** — regex đếm từ khoá không bám sát chất lượng thật |
 
-`insight` thấp nhất — đây là chiều mềm (câu trả lời có gợi ý hành động không), chấm chặt tay.
+→ `insight` cần **LLM-as-judge**. Đã implement (`--judge`), nhưng full run 100 câu đang bị
+free-tier quota chặn (22/30 call lỗi 429). Framework sẵn sàng, chạy lại khi có quota:
 
-## 3 câu không đạt
+```bash
+python tests/eval_100.py --rescore eval-baseline/results.csv --judge   # chấm lại + judge, không cần server
+```
 
-| # | Câu hỏi | overall | Nguyên nhân |
-|---|---|---|---|
-| 37 | "Tổng số Units Sold trên toàn bộ dataset?" | 0.00 | **Client read-timeout** — server kẹt trong retry storm 429 của free tier, không phải lỗi logic. Pass ở các lần chạy có quota dư. |
-| 46 | "Tổng Debit của toàn bộ sổ cái?" | 0.00 | Như trên. |
-| 81 | "Thủ đô của nước Pháp là đâu?" | 0.53 | Off-topic — bot từ chối đúng (`factual_ok = 1.0`); điểm thấp do rubric trừ `insight`/`concise` khi câu deflection ngắn. Hành vi đúng ý đồ. |
+⚠️ 30 nhãn calibration do 1 người review — đủ để sanity-check heuristic, **không phải** human-eval quy mô lớn.
 
-Correctness logic thực tế ~ 99–100/100; các lần chạy độc lập cho pass-rate 95–97%, dao động do
-2–3 câu bị 429-timeout, **không phải** do câu trả lời sai.
+## Bug agent do eval phát hiện (chưa sửa — ngoài scope harness)
 
-## Ghi chú độ tin cậy của run này
+Cụm ~14 câu fail tập trung ở 3 dataset, đều là **lỗi agent thật**, không phải lỗi chấm điểm:
 
-Run này thực hiện với **Gemini API key free tier đã gần cạn quota** (server log: 528x HTTP 429).
-Hệ quả:
+| triệu chứng | dataset | ví dụ |
+|---|---|---|
+| Cột có dấu cách thừa (`" Profit "`, `"  Sales "`) → planner không resolve, trả 0 / "không tìm thấy" | financial_sample | #31 (GT 17.6M, trả 0), #33, #34, #36, #38 |
+| Sổ cái đa tiền tệ → cộng gộp AUD+CAD+EUR+GBP+USD, số vô nghĩa | general_ledger | #46, #47, #48, #60 |
+| Multi-sheet → đếm nhầm bảng (đếm orders thay vì customers) | viet_relational | #71 (GT 12, trả 32) |
+| Câu hỏi kiểu chat ("ai bán giỏi nhất?") → rơi về template `# Executive Data Brief` thay vì trả lời tự nhiên | mọi dataset | #97, #98, #99, #100 |
 
-- **Latency mean vô nghĩa** — vài request bị chuỗi failover retry với backoff tới 15–17 phút. Dùng **median (~4.7 s)** làm số đại diện.
-- **2 câu điểm 0** là timeout phía client, không phải lỗi hệ thống. Chạy lại với quota dư -> pass.
-- Pass-rate và các chiều chất lượng **ổn định** qua 3 lần chạy độc lập (95–97% pass, avg overall 0.89–0.90).
+## Ghi chú độ tin cậy
 
-Đây đồng thời là bằng chứng chuỗi failover hoạt động dưới áp lực rate-limit: **0/100 câu crash, 0/100 rơi rule-based**.
+- Run thực hiện với key Gemini free tier gần cạn quota (528× HTTP 429). **Latency mean vô nghĩa**;
+  dùng median (~4.7 s). 2 câu (#37, #46) client read-timeout → điểm 0, không phải lỗi logic.
+- Câu trả lời trong `results.csv` bị cắt ở 300 ký tự (run cũ; cap hiện tại 2000) → `concise`
+  cho câu dài hơi lạc quan. Chạy lại sẽ chính xác hơn.
+- Pass-rate và các chiều **ổn định** qua nhiều lần rescore.
 
 ## Chạy lại
 
 ```bash
-uvicorn backend.app.main:app --port 8000 &          # cần GEMINI_API_KEY
-python tests/eval_100.py --base-url http://localhost:8000 --delay 3
-#   --delay N   giãn N giây giữa các request, tránh 429 free tier
-#   --ids 1-20  chạy subset
-#   --dataset sales_data   chỉ 1 dataset
-```
+# eval đầy đủ (cần server + GEMINI_API_KEY)
+uvicorn backend.app.main:app --port 8000 &
+python tests/eval_100.py --base-url http://localhost:8000 --delay 3 \
+    --baseline docs/eval-baseline/summary.json      # in bảng regression vs baseline
 
-Output ghi vào `results/eval_<timestamp>.{csv,html,json}` (`results/` được gitignore).
+# chấm lại run cũ bằng scoring hiện tại — KHÔNG cần server, KHÔNG tốn quota
+python tests/eval_100.py --rescore docs/eval-baseline/results.csv
+
+# calibrate heuristic vs nhãn tay
+python tests/eval_calibration.py
+```
