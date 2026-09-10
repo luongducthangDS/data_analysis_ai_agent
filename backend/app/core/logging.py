@@ -30,7 +30,7 @@ def setup_logging(debug: bool = False) -> None:
     logging.basicConfig(level=level, handlers=[file_handler, console_handler])
 
     # Quiet noisy third-party loggers
-    for name in ("httpx", "httpcore", "groq", "google"):
+    for name in ("httpx", "httpcore", "google"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 

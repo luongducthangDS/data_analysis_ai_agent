@@ -13,5 +13,6 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
 # Environment variables — set in Railway dashboard → Variables tab:
-# GROQ_API_KEY   required for AI features
-# DATA_DIR       optional — set to volume mount path (e.g. /data) for persistent uploads/reports
+# GEMINI_API_KEY      required for AI features
+# OPENROUTER_API_KEY  optional — fallback provider chain
+# DATA_DIR            optional — volume mount path (e.g. /data) for persistent uploads/reports

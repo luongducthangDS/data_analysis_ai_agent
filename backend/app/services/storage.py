@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os as _os
 import time
 import uuid
@@ -26,6 +27,20 @@ HISTORY_DIR = BASE_DATA_DIR / "history"
 _MAX_CACHE_SIZE = 200
 _CACHE_TTL_SECONDS = 24 * 3600
 
+_log = logging.getLogger(__name__)
+
+
+def resolve_sheet_key(name: str, sheets: dict[str, pd.DataFrame]) -> str:
+    """Resolve a user-supplied sheet name to a real key (exact, or by sheet part of 'file::sheet')."""
+    if name in sheets:
+        return name
+    matches = [key for key in sheets if key.split("::", 1)[-1] == name]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous sheet name '{name}'. Use one of: {', '.join(matches)}")
+    raise ValueError(f"Unknown sheet name '{name}'.")
+
 
 @dataclass
 class DatasetSession:
@@ -43,6 +58,7 @@ class DatasetSession:
     sheets_context: str = ""
     ecommerce_col_map: dict[str, str] = field(default_factory=dict)
     detected_platform: str | None = None
+    active_sheet: str | None = None  # which sheet drives `dataframe`; None/"__concat__" = auto
 
 
 class SessionStore:
@@ -98,7 +114,7 @@ class SessionStore:
         if not all_sheets:
             raise ValueError("No valid sheets found in upload.")
 
-        analysis_df = self._build_analysis_dataframe(all_sheets)
+        analysis_df, active_sheet = self._resolve_active_dataframe(all_sheets)
         relationships: list[SheetRelationship] = []
         context = ""
         if len(all_sheets) > 1:
@@ -123,10 +139,37 @@ class SessionStore:
             sheets_context=context,
             ecommerce_col_map=ecom_col_map,
             detected_platform=detected_platform,
+            active_sheet=active_sheet,
         )
         self._sessions[session_id] = session
         self._last_accessed[session_id] = time.time()
         self._insert_session(session)
+        return session
+
+    def set_active_sheet(self, session: DatasetSession, sheet_key: str) -> DatasetSession:
+        """
+        Switch which sheet drives analysis. Resolves the key, rebuilds dataframe +
+        profile + e-commerce mapping, invalidates the dashboard cache, and persists.
+        """
+        from backend.app.services.ecommerce_columns import detect_ecommerce_columns, detect_platform
+        from backend.app.services.profiler import build_profile
+
+        key = resolve_sheet_key(sheet_key, session.sheets)
+        session.dataframe = session.sheets[key].copy()
+        session.active_sheet = key
+        session.profile = build_profile(session.dataframe)
+        session.ecommerce_col_map = detect_ecommerce_columns(session.dataframe)
+        session.detected_platform = detect_platform(
+            session.dataframe, session.ecommerce_col_map, filename=session.filename
+        )
+        # Invalidate cached dashboard so it recomputes for the new sheet.
+        for attr in ("_dashboard_cache", "_dashboard_charts_raw"):
+            if hasattr(session, attr):
+                try:
+                    delattr(session, attr)
+                except Exception:
+                    pass
+        self.save(session)
         return session
 
     def get(self, session_id: str, owner_id: str = "") -> DatasetSession:
@@ -153,9 +196,13 @@ class SessionStore:
                     return
                 row.profile = session.profile
                 row.report_id = session.report_id
+                row.active_sheet = session.active_sheet
+                row.ecommerce_col_map = session.ecommerce_col_map or None
+                row.detected_platform = session.detected_platform
                 row.updated_at = datetime.utcnow()
-        except Exception:
-            pass  # Don't crash the API if DB is temporarily unavailable
+        except Exception as exc:
+            # Don't crash the API if DB is temporarily unavailable — but make it visible.
+            _log.warning("session.save DB write failed (%s): %s", type(exc).__name__, exc)
 
     def count(self) -> int:
         try:
@@ -259,9 +306,10 @@ class SessionStore:
                     sheets_context=session.sheets_context,
                     ecommerce_col_map=session.ecommerce_col_map or None,
                     detected_platform=session.detected_platform,
+                    active_sheet=session.active_sheet,
                 ))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("session._insert_session DB write failed (%s): %s", type(exc).__name__, exc)
 
     def _restore_from_db(self, session_id: str) -> DatasetSession:
         """Load a session from DB and reload its DataFrames from disk."""
@@ -290,7 +338,9 @@ class SessionStore:
             if not all_sheets:
                 raise KeyError(f"No files could be loaded for session: {session_id}")
 
-            analysis_df = self._build_analysis_dataframe(all_sheets)
+            analysis_df, active_sheet = self._resolve_active_dataframe(
+                all_sheets, active_sheet=getattr(row, "active_sheet", None)
+            )
             history = self._load_history(session_id)
             file_path_first = (
                 UPLOAD_DIR / f"{session_id}_{Path(file_names[0]).name.replace(' ', '_')}"
@@ -312,6 +362,7 @@ class SessionStore:
                 sheets_context=row.sheets_context or "",
                 ecommerce_col_map=row.ecommerce_col_map or {},
                 detected_platform=row.detected_platform,
+                active_sheet=active_sheet,
             )
             self._sessions[session_id] = session
             return session
@@ -335,8 +386,27 @@ class SessionStore:
 
     @staticmethod
     def _build_analysis_dataframe(sheets: dict[str, pd.DataFrame]) -> pd.DataFrame:
+        df, _ = SessionStore._resolve_active_dataframe(sheets)
+        return df
+
+    @staticmethod
+    def _resolve_active_dataframe(
+        sheets: dict[str, pd.DataFrame], active_sheet: str | None = None
+    ) -> tuple[pd.DataFrame, str | None]:
+        """
+        Pick which frame drives analysis and return (dataframe, active_label).
+          - active_sheet given & present → that sheet
+          - 1 sheet → that sheet
+          - N sheets same schema → vertical concat (label "__concat__")
+          - N sheets different schema → highest-scoring sheet (silent-loss made
+            visible via the returned label, surfaced to the user as a banner)
+        """
+        if active_sheet and active_sheet in sheets:
+            return sheets[active_sheet].copy(), active_sheet
+
         if len(sheets) == 1:
-            return next(iter(sheets.values()))
+            key = next(iter(sheets.keys()))
+            return sheets[key], key
 
         column_sets = {tuple(df.columns.tolist()) for df in sheets.values()}
         if len(column_sets) == 1:
@@ -345,7 +415,7 @@ class SessionStore:
                 frame = df.copy()
                 frame["_source_sheet"] = sheet_name
                 frames.append(frame)
-            return pd.concat(frames, ignore_index=True)
+            return pd.concat(frames, ignore_index=True), "__concat__"
 
         best_name, best_df = max(
             sheets.items(),
@@ -353,7 +423,7 @@ class SessionStore:
         )
         selected = best_df.copy()
         selected.attrs["source_sheet"] = best_name
-        return selected
+        return selected, best_name
 
     @staticmethod
     def _analysis_score(df: pd.DataFrame) -> float:
@@ -429,6 +499,71 @@ class SessionStore:
             if parsed.notna().sum() / max(len(non_null), 1) >= 0.85:
                 result[col] = parsed
         return result
+
+
+def build_source_frame(
+    session: DatasetSession, source: dict | None
+) -> tuple[pd.DataFrame, str | None]:
+    """
+    Resolve a plan's optional `source` to the DataFrame a query should run on.
+
+      - None / empty            → session.dataframe (active sheet) — backward compatible
+      - {"sheet": "<name>"}     → that single sheet
+      - {"join": {"base","with","on","how"}} → left/inner join of two sheets
+
+    Safety: only joins on a column present in BOTH sheets; defaults how="left";
+    any resolution error falls back to session.dataframe so the query still runs.
+    Returns (frame, warning) — warning is a user-facing note (e.g. fan-out) or None.
+    """
+    if not source or not isinstance(source, dict):
+        return session.dataframe, None
+
+    sheets = session.sheets or {}
+    if not sheets:
+        return session.dataframe, None
+
+    try:
+        # Single sheet
+        if source.get("sheet"):
+            key = resolve_sheet_key(str(source["sheet"]), sheets)
+            return sheets[key].copy(), None
+
+        # Join
+        join = source.get("join")
+        if isinstance(join, dict):
+            base_key = resolve_sheet_key(str(join.get("base", "")), sheets)
+            with_key = resolve_sheet_key(str(join.get("with", "")), sheets)
+            base_df, with_df = sheets[base_key], sheets[with_key]
+
+            on = join.get("on")
+            common = list(set(base_df.columns) & set(with_df.columns))
+            if not on:
+                # Prefer a detected relationship join key, else any common column.
+                rel_key = next(
+                    (r.join_key for r in session.sheet_relationships
+                     if r.join_key and {r.sheet1, r.sheet2} == {base_key, with_key}),
+                    None,
+                )
+                on = rel_key or (common[0] if common else None)
+            if not on or on not in base_df.columns or on not in with_df.columns:
+                return session.dataframe, None  # can't join safely → active sheet
+
+            how = join.get("how", "left")
+            if how not in {"left", "inner"}:
+                how = "left"
+            merged = base_df.merge(with_df, on=on, how=how, suffixes=("", "_dup"))
+
+            warning = None
+            if len(merged) > 3 * max(len(base_df), 1):
+                warning = (
+                    f"Phép join '{on}' làm số dòng tăng từ {len(base_df)} lên {len(merged)} "
+                    "(quan hệ 1-nhiều) — các phép tính tổng/đếm có thể bị nhân lên."
+                )
+            return merged, warning
+    except Exception:
+        return session.dataframe, None
+
+    return session.dataframe, None
 
 
 session_store = SessionStore()

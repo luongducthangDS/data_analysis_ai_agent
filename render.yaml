@@ -13,12 +13,10 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
-      # ── LLM providers (set at least one) ───────────────────────────────────
-      - key: GROQ_API_KEY
+      # ── LLM providers ─────────────────────────────────────────────────────
+      - key: GEMINI_API_KEY      # required
         sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: HF_TOKEN
+      - key: OPENROUTER_API_KEY  # optional — fallback provider chain
         sync: false
 
       # ── Database ────────────────────────────────────────────────────────────

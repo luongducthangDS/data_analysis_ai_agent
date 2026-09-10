@@ -6,7 +6,6 @@ import tempfile
 _TEST_DIR = tempfile.mkdtemp(prefix="data_agent_test_")
 os.environ["DATA_DIR"] = _TEST_DIR
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DIR}/test.db"
-os.environ.setdefault("GROQ_API_KEY", "test-key")
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 
 import pytest

@@ -38,6 +38,9 @@ test_write
 results/
 uv3_*.txt
 
+# Claude Code worktree pointers (per-machine, not shared)
+.claude/worktrees/
+
 # Logs and local files
 logs/
 *.log

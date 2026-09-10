@@ -7,10 +7,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from backend.app.api.deps import get_session, limiter
 from backend.app.core.auth import get_current_user
-from backend.app.schemas import ImportGSheetRequest, ImportUrlRequest, UploadResponse
+from backend.app.schemas import ImportUrlRequest, UploadResponse
 from backend.app.services.profiler import build_profile
 from backend.app.services.storage import session_store
-from backend.app.services.workspace_connectors import fetch_from_gsheet, fetch_from_url
+from backend.app.services.workspace_connectors import fetch_from_url
 
 _log = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,9 +72,7 @@ def _build_upload_response(uploads: list[tuple[str, bytes]], owner_id: str = "")
             file_name, sheet_name = sheet_key, sheet_key
         file_sheet_map.setdefault(file_name, []).append(sheet_key)
 
-    preview_df = session.dataframe.head(10)
-    preview_columns = [str(c) for c in preview_df.columns]
-    preview_rows = preview_df.astype(str).where(preview_df.notna(), None).to_dict(orient="records")
+    preview_columns, preview_rows = build_preview(session.dataframe)
     suggested_queries = _generate_suggested_queries(session.dataframe, profile)
 
     return UploadResponse(
@@ -88,7 +86,16 @@ def _build_upload_response(uploads: list[tuple[str, bytes]], owner_id: str = "")
         preview_columns=preview_columns,
         preview_rows=preview_rows,
         suggested_queries=suggested_queries,
+        active_sheet=session.active_sheet,
     )
+
+
+def build_preview(df, n: int = 10) -> tuple[list[str], list[dict]]:
+    """Column names + first N rows (stringified, NaN→None) for table preview."""
+    preview_df = df.head(n)
+    columns = [str(c) for c in preview_df.columns]
+    rows = preview_df.astype(str).where(preview_df.notna(), None).to_dict(orient="records")
+    return columns, rows
 
 
 @router.post("/api/upload", response_model=UploadResponse)
@@ -127,23 +134,6 @@ def import_from_url(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Không thể tải file: {exc}") from exc
-    try:
-        return _build_upload_response([(filename, content)], owner_id=_user.get("user_id", ""))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/api/import-gsheet", response_model=UploadResponse)
-def import_from_gsheet(
-    req: ImportGSheetRequest,
-    _user: dict = Depends(get_current_user),
-) -> UploadResponse:
-    try:
-        filename, content = fetch_from_gsheet(req.url_or_id, req.sheet_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Google Sheets error: {exc}") from exc
     try:
         return _build_upload_response([(filename, content)], owner_id=_user.get("user_id", ""))
     except Exception as exc:

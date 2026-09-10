@@ -34,6 +34,16 @@ class UploadResponse(BaseModel):
     preview_columns: list[str] = Field(default_factory=list, description="Column names for table preview")
     preview_rows: list[dict[str, Any]] = Field(default_factory=list, description="First 10 rows for table preview")
     suggested_queries: list[str] = Field(default_factory=list, description="Auto-generated example queries")
+    active_sheet: str | None = Field(default=None, description="Sheet key currently driving analysis ('__concat__' = merged same-schema sheets)")
+
+
+class ActiveSheetResponse(BaseModel):
+    session_id: str
+    active_sheet: str | None = None
+    profile: DatasetProfile
+    preview_columns: list[str] = Field(default_factory=list)
+    preview_rows: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_queries: list[str] = Field(default_factory=list)
 
 
 class AnalyzeRequest(BaseModel):
@@ -104,15 +114,14 @@ class MergeSheetsResponse(BaseModel):
     merged_rows: int
     merged_columns: int
     merged_sheet_name: str
+    active_sheet: str | None = None
+    profile: DatasetProfile | None = None
+    preview_columns: list[str] = Field(default_factory=list)
+    preview_rows: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ImportUrlRequest(BaseModel):
     url: str
-
-
-class ImportGSheetRequest(BaseModel):
-    url_or_id: str
-    sheet_name: str | None = None
 
 
 class AgentStepSchema(BaseModel):

@@ -12,7 +12,7 @@ def execute_node(state: AgentState) -> AgentState:
     Run the analysis plan (Pandas operations). Pure deterministic — no LLM.
     Reuses execute_plan() from analysis_planner.
     """
-    from backend.app.services.storage import session_store
+    from backend.app.services.storage import session_store, build_source_frame
     from backend.app.services.analysis_planner import execute_plan
 
     if state.get("plan") is None:
@@ -24,20 +24,25 @@ def execute_node(state: AgentState) -> AgentState:
 
     try:
         session = session_store.get(session_id)
-        df = session.dataframe
+        # Resolve which frame to query: active sheet by default, or a cross-sheet
+        # source (single sheet / join) when the planner requested one.
+        df, join_warning = build_source_frame(session, plan.get("source"))
         result_df = execute_plan(df, plan)
         _log.info(
-            "execute_node: plan executed, result shape=%s, action=%r",
+            "execute_node: plan executed, result shape=%s, action=%r, source=%r",
             result_df.shape if result_df is not None else "None",
-            plan.get("action"),
+            plan.get("action"), plan.get("source"),
         )
         import json
         compact = {k: v for k, v in plan.items() if not k.startswith("_")}
-        return {
+        new_state = {
             **state,
             "result_df": result_df,
             "executed_queries": [json.dumps(compact, ensure_ascii=False)],
         }
+        if join_warning:
+            new_state["join_warning"] = join_warning
+        return new_state
     except Exception as exc:
         _log.warning("execute_node: plan execution failed: %s", exc)
         return {**state, "result_df": None, "executed_queries": [f"[execute_failed: {exc}]"], "error": str(exc)}

@@ -29,10 +29,11 @@ def plan_node(state: AgentState) -> AgentState:
     Falls back to rule-based plan if LLM fails or returns invalid JSON.
     """
     from backend.app.services.llm_service import get_llm_client
-    from backend.app.services.storage import session_store
+    from backend.app.services.storage import session_store, build_source_frame
     from backend.app.services.analysis_planner import (
         build_fallback_plan, _build_planner_prompt, _validate_plan_against_dataframe,
         _repair_plan_for_question, _repair_who_plan, _repair_column_names,
+        _build_multi_sheet_catalog,
     )
 
     question = state["question"]
@@ -44,15 +45,24 @@ def plan_node(state: AgentState) -> AgentState:
         df = session.dataframe
         profile = session.profile or {}
         client = get_llm_client()
-        prompt = _build_planner_prompt(df, question, profile, history, session.ecommerce_col_map or None)
+        # When the workbook has >1 sheet, expose the catalog so the LLM can request
+        # a cross-sheet `source` (single sheet or join).
+        catalog = _build_multi_sheet_catalog(session) if len(session.sheets) > 1 else ""
+        prompt = _build_planner_prompt(
+            df, question, profile, history, session.ecommerce_col_map or None, multi_sheet_catalog=catalog
+        )
         raw = _call_llm(client, prompt)
         plan = _extract_json(raw)
         plan = _remap_action_aliases(plan)
-        plan = _repair_column_names(plan, df)   # fuzzy-resolve LLM column names before validation
-        plan = _repair_who_plan(plan, question, df)
+        # If the plan targets another sheet / a join, validate against THAT frame.
+        validate_df = df
+        if plan.get("source"):
+            validate_df, _ = build_source_frame(session, plan["source"])
+        plan = _repair_column_names(plan, validate_df)
+        plan = _repair_who_plan(plan, question, validate_df)
         plan = _repair_plan_for_question(plan, question)
-        _validate_plan_against_dataframe(df, plan)
-        _log.info("plan_node: LLM plan OK action=%r", plan.get("action"))
+        _validate_plan_against_dataframe(validate_df, plan)
+        _log.info("plan_node: LLM plan OK action=%r source=%r", plan.get("action"), plan.get("source"))
         return {**state, "plan": plan, "llm_plan_failed": False}
     except Exception as exc:
         _log.warning("plan_node: LLM planning failed (%s) — using rule-based fallback", exc)

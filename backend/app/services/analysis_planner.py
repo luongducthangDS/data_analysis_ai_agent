@@ -486,12 +486,38 @@ def _build_plan_with_llm(
         return fallback
 
 
+def _build_multi_sheet_catalog(session: Any) -> str:
+    """Describe all sheets + detected join keys so the LLM can target a cross-sheet `source`."""
+    sheets = getattr(session, "sheets", None) or {}
+    if len(sheets) <= 1:
+        return ""
+    active = getattr(session, "active_sheet", None)
+    lines = ["", "DANH MỤC SHEET (workbook nhiều sheet):"]
+    for key, sdf in sheets.items():
+        cols = ", ".join(str(c) for c in list(sdf.columns)[:12])
+        mark = "  ← đang phân tích" if key == active else ""
+        lines.append(f'  - "{key}" ({len(sdf)} dòng): {cols}{mark}')
+    rels = [r for r in getattr(session, "sheet_relationships", []) if getattr(r, "join_key", None)]
+    if rels:
+        lines.append("QUAN HỆ (join key đã phát hiện):")
+        for r in rels:
+            lines.append(f'  - "{r.sheet1}" ↔ "{r.sheet2}" join trên "{r.join_key}" ({r.relationship_type})')
+    lines.append(
+        "Nếu câu hỏi cần dữ liệu từ NHIỀU sheet, thêm field \"source\" vào plan: "
+        '{"join":{"base":"<sheet>","with":"<sheet>","on":"<join_key>","how":"left"}}. '
+        'Dùng 1 sheet khác: {"sheet":"<tên sheet>"}. '
+        "KHÔNG có source = dùng sheet đang phân tích. Chỉ join trên join key đã liệt kê ở trên."
+    )
+    return "\n".join(lines)
+
+
 def _build_planner_prompt(
     df: pd.DataFrame,
     question: str,
     profile: dict[str, Any],
     history: list[dict[str, str]] | None = None,
     ecommerce_col_map: dict[str, str] | None = None,
+    multi_sheet_catalog: str = "",
 ) -> str:
     schema_lines = []
     for col, dtype in profile["column_types"].items():
@@ -568,6 +594,9 @@ Q: "phân phối điểm" / "phân bố lương" / "histogram doanh thu"
 Q: "range điểm" / "khoảng giá trị lương" / "biên độ giá"
 {{"action":"compare_metrics","metrics":[{{"column":"<numeric_col>","aggregation":"min","label":"Thấp nhất"}},{{"column":"<numeric_col>","aggregation":"max","label":"Cao nhất"}}]}}
 
+Q: "tổng doanh thu theo tên sản phẩm" (doanh thu ở sheet Orders, tên SP ở sheet Items, join order_id)
+{{"action":"aggregate","source":{{"join":{{"base":"Orders","with":"Items","on":"order_id","how":"left"}}}},"group_by":["product_name"],"metrics":[{{"column":"revenue","aggregation":"sum","label":"Tổng doanh thu"}}],"sort":[{{"column":"Tổng doanh thu","direction":"desc"}}],"limit":20}}
+{multi_sheet_catalog}
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
 {_format_ecommerce_context(ecommerce_col_map)}
 CÂU HỎI HIỆN TẠI:

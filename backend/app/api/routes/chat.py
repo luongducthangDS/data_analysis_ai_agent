@@ -4,11 +4,13 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
+from typing import Optional
 
 from backend.app.agents.runner import AgentOutput, run, stream_answer
 from backend.app.core.auth import get_current_user
+from backend.app.services.llm_service import set_request_keys
 from backend.app.schemas import (
     AgentChatResponse,
     AnalyzeRequest,
@@ -74,6 +76,9 @@ def chat(
 async def chat_stream(
     req: ChatRequest,
     _user: dict = Depends(get_current_user),
+    x_gemini_key: Optional[str] = Header(default=None, alias="X-GEMINI-Key"),
+    x_anthropic_key: Optional[str] = Header(default=None, alias="X-ANTHROPIC-Key"),
+    x_llm_provider: Optional[str] = Header(default=None, alias="X-LLM-Provider"),
 ) -> StreamingResponse:
     """
     SSE streaming endpoint. Each event: data: <json>\\n\\n
@@ -84,6 +89,13 @@ async def chat_stream(
       {"type": "done",  "charts": [...], "source": "llm"|"fallback"|...}
       {"type": "error", "detail": "..."}
     """
+    # Inject user-supplied keys (from Settings UI) for this request's context
+    set_request_keys(
+        gemini=x_gemini_key or "",
+        anthropic=x_anthropic_key or "",
+        provider=x_llm_provider or "",
+    )
+
     try:
         session = session_store.get(req.session_id)
     except KeyError as exc:

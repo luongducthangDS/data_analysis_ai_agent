@@ -6,27 +6,38 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.api.deps import get_session
 from backend.app.core.auth import get_current_user
+from pydantic import BaseModel
+
 from backend.app.schemas import (
+    ActiveSheetResponse,
     GetSheetsResponse,
     MergeSheetsRequest,
     MergeSheetsResponse,
     SheetData,
 )
-from backend.app.services.storage import session_store, DatasetSession
+from backend.app.api.routes.upload import build_preview
+from backend.app.services.storage import session_store, DatasetSession, resolve_sheet_key
+
+
+class SetActiveSheetRequest(BaseModel):
+    sheet_name: str
+
+
+def _refresh_payload(session: DatasetSession) -> ActiveSheetResponse:
+    """Build the post-switch/merge refresh payload (profile + preview) for the frontend."""
+    from backend.app.api.routes.upload import _generate_suggested_queries
+    cols, rows = build_preview(session.dataframe)
+    return ActiveSheetResponse(
+        session_id=session.session_id,
+        active_sheet=session.active_sheet,
+        profile=session.profile,
+        preview_columns=cols,
+        preview_rows=rows,
+        suggested_queries=_generate_suggested_queries(session.dataframe, session.profile),
+    )
 
 _log = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _resolve_sheet_key(name: str, sheets: dict) -> str:
-    if name in sheets:
-        return name
-    matches = [key for key in sheets if key.split("::", 1)[-1] == name]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        raise ValueError(f"Ambiguous sheet name '{name}'. Use one of: {', '.join(matches)}")
-    raise ValueError(f"Unknown sheet name '{name}'.")
 
 
 @router.get("/api/sheets/{session_id}", response_model=GetSheetsResponse)
@@ -75,6 +86,22 @@ def get_sheets(
     )
 
 
+@router.post("/api/session/{session_id}/active-sheet", response_model=ActiveSheetResponse)
+def set_active_sheet(
+    session_id: str,
+    req: SetActiveSheetRequest,
+    session: DatasetSession = Depends(get_session),
+) -> ActiveSheetResponse:
+    """Switch which sheet drives analysis; returns refreshed profile + preview."""
+    if not session.sheets:
+        raise HTTPException(status_code=400, detail="This dataset has no multiple sheets.")
+    try:
+        session_store.set_active_sheet(session, req.sheet_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _refresh_payload(session)
+
+
 @router.post("/api/merge-sheets", response_model=MergeSheetsResponse)
 def merge_sheets(
     req: MergeSheetsRequest,
@@ -93,7 +120,7 @@ def merge_sheets(
         raise HTTPException(status_code=400, detail="Need at least 2 sheets to merge.")
 
     try:
-        resolved = [_resolve_sheet_key(n, session.sheets) for n in req.sheet_names]
+        resolved = [resolve_sheet_key(n, session.sheets) for n in req.sheet_names]
         sheets_to_merge = {n: session.sheets[n] for n in resolved}
 
         merged_df = sheets_to_merge[resolved[0]].copy()
@@ -108,14 +135,32 @@ def merge_sheets(
                 join_col = list(common_cols)[0]
                 merged_df = merged_df.merge(df_to_merge, on=join_col, how="left", suffixes=("", "_dup"))
 
-        merged_name = "_".join(resolved)
+        # Readable label from the sheet parts ("Orders + Items"), not the raw
+        # "file::sheet" keys. Keep it unique against existing sheet keys.
+        short = " + ".join(k.split("::")[-1] for k in resolved)
+        merged_name = short
+        i = 2
+        while merged_name in session.sheets:
+            merged_name = f"{short} ({i})"
+            i += 1
         session.sheets[merged_name] = merged_df
 
+        # Make the merged frame the active analysis target (re-profiles + persists),
+        # so chat/dashboard actually use it instead of leaving it inert.
+        session_store.set_active_sheet(session, merged_name)
+
+        cols, rows = build_preview(session.dataframe)
         return MergeSheetsResponse(
             session_id=session.session_id,
             merged_rows=len(merged_df),
             merged_columns=len(merged_df.columns),
             merged_sheet_name=merged_name,
+            active_sheet=session.active_sheet,
+            profile=session.profile,
+            preview_columns=cols,
+            preview_rows=rows,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

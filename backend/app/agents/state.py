@@ -20,6 +20,7 @@ class AgentState(TypedDict, total=False):
     # Execution
     result_df: Any | None               # pd.DataFrame after execute_plan()
     executed_queries: list[str]
+    join_warning: str | None            # fan-out caveat when a cross-sheet join inflates rows
 
     # Output
     charts: list[dict[str, Any]]

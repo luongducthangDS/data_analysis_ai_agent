@@ -116,6 +116,10 @@ def synthesize_node(state: AgentState) -> AgentState:
     plan = state.get("plan") or {}
     result_df = state.get("result_df")
     session_id = state["session_id"]
+    join_warning = state.get("join_warning")
+
+    def _with_warning(ans: str) -> str:
+        return f"⚠️ {join_warning}\n\n{ans}" if join_warning else ans
 
     try:
         session = session_store.get(session_id)
@@ -187,9 +191,9 @@ def synthesize_node(state: AgentState) -> AgentState:
         answer = _call_llm(client, prompt)
         if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df, extra_allowed=dist_allowed):
             _log.info("synthesize_node: LLM synthesis OK (%d chars)", len(answer))
-            return {**state, "answer": answer.strip(), "charts": charts, "llm_synthesis_failed": False}
+            return {**state, "answer": _with_warning(answer.strip()), "charts": charts, "llm_synthesis_failed": False}
         _log.warning("synthesize_node: LLM response rejected (invalid or ungrounded) — using deterministic answer")
     except Exception as exc:
         _log.warning("synthesize_node: LLM synthesis failed (%s: %s)", type(exc).__name__, exc)
 
-    return {**state, "answer": data_summary, "charts": charts, "llm_synthesis_failed": True}
+    return {**state, "answer": _with_warning(data_summary), "charts": charts, "llm_synthesis_failed": True}

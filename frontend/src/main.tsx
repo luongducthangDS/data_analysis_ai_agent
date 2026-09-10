@@ -1,7 +1,128 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import Plot from "react-plotly.js";
 import "./styles.css";
+
+// ── LLM Keys (localStorage) ───────────────────────────────────────────────────
+const LS = {
+  get: (k: string) => localStorage.getItem(k) ?? "",
+  set: (k: string, v: string) => v ? localStorage.setItem(k, v) : localStorage.removeItem(k),
+};
+
+function loadKeys() {
+  return {
+    gemini:    LS.get("da_gemini_key"),
+    anthropic: LS.get("da_anthropic_key"),
+    provider:  LS.get("da_provider") || "auto",
+  };
+}
+
+function saveKeys(keys: ReturnType<typeof loadKeys>) {
+  LS.set("da_gemini_key",    keys.gemini);
+  LS.set("da_anthropic_key", keys.anthropic);
+  LS.set("da_provider",      keys.provider === "auto" ? "" : keys.provider);
+}
+
+function keyHeaders(keys: ReturnType<typeof loadKeys>): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (keys.gemini)    h["X-GEMINI-Key"]     = keys.gemini;
+  if (keys.anthropic) h["X-ANTHROPIC-Key"]  = keys.anthropic;
+  if (keys.provider && keys.provider !== "auto") h["X-LLM-Provider"] = keys.provider;
+  return h;
+}
+
+// ── Settings modal ────────────────────────────────────────────────────────────
+function SettingsModal({
+  onClose,
+}: {
+  onClose: () => void;
+}) {
+  const [keys, setKeys] = useState(loadKeys);
+  const [reveal, setReveal] = useState({ gemini: false, anthropic: false });
+  const [saved, setSaved] = useState(false);
+
+  function handleSave() {
+    saveKeys(keys);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-head">
+          <span className="modal-title">⚙️ API Keys</span>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">LLM Provider</div>
+          <div className="settings-field">
+            <label>Active provider</label>
+            <select
+              className="provider-select"
+              value={keys.provider}
+              onChange={(e) => setKeys((k) => ({ ...k, provider: e.target.value }))}
+            >
+              <option value="auto">🔄 Auto (fallback chain)</option>
+              <option value="gemini">✨ Google Gemini</option>
+              <option value="anthropic">🤖 Anthropic Claude</option>
+            </select>
+            <div className="settings-hint">
+              Auto mode tries Gemini → Anthropic in order.
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-group-label">API Keys — stored in your browser only</div>
+
+          {[
+            { id: "gemini",    label: "Google Gemini API Key", tag: "Free tier",   placeholder: "AIza...",     recommended: true },
+            { id: "anthropic", label: "Anthropic API Key",     tag: "Paid",        placeholder: "sk-ant-...",  recommended: false },
+          ].map(({ id, label, tag, placeholder, recommended }) => (
+            <div className="settings-field" key={id}>
+              <label>
+                {label}
+                <span className={`tag${recommended ? " recommended" : ""}`}>{tag}</span>
+              </label>
+              <div className="settings-input-wrap">
+                <input
+                  className="settings-input"
+                  type={reveal[id as keyof typeof reveal] ? "text" : "password"}
+                  placeholder={placeholder}
+                  value={keys[id as keyof typeof keys]}
+                  onChange={(e) => setKeys((k) => ({ ...k, [id]: e.target.value }))}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button
+                  className="toggle-reveal"
+                  type="button"
+                  onClick={() => setReveal((r) => ({ ...r, [id]: !r[id as keyof typeof r] }))}
+                  title="Toggle visibility"
+                >
+                  {reveal[id as keyof typeof reveal] ? "🙈" : "👁️"}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          <div className="settings-hint">
+            Keys are saved to <code>localStorage</code> in your browser and sent as HTTP headers.
+            They never leave your device except to the backend you're running.
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          {saved && <span className="save-toast">✓ Saved!</span>}
+          <button className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button className="btn-save" onClick={handleSave}>Save keys</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Profile {
@@ -56,34 +177,46 @@ interface DashboardData {
   suggested_queries: string[];
 }
 
+interface SheetInfo {
+  file_name: string | null;
+  name: string;
+  rows: number;
+  columns: number;
+  column_names: string[];
+}
+interface SheetRelationship {
+  sheet1: string;
+  sheet2: string;
+  join_key: string | null;
+  relationship_type: string;
+  similarity_score: number;
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
-const api = {
-  async upload(files: File[]) {
-    const form = new FormData();
-    files.forEach((f) => form.append("files", f));
-    const r = await fetch("/api/upload", { method: "POST", body: form });
-    if (!r.ok) throw new Error((await r.json()).detail ?? "Upload failed");
-    return r.json();
-  },
-  async importUrl(url: string) {
-    const r = await fetch("/api/import-url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-    if (!r.ok) throw new Error((await r.json()).detail ?? "Import failed");
-    return r.json();
-  },
-  async importGSheet(url_or_id: string, sheet_name?: string) {
-    const r = await fetch("/api/import-gsheet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url_or_id, sheet_name: sheet_name || undefined }),
-    });
-    if (!r.ok) throw new Error((await r.json()).detail ?? "Google Sheets import failed");
-    return r.json();
-  },
-};
+function makeApi(keys: ReturnType<typeof loadKeys>) {
+  const kh = keyHeaders(keys);
+
+  return {
+    async upload(files: File[]) {
+      const form = new FormData();
+      files.forEach((f) => form.append("files", f));
+      // FormData: can't set Content-Type (browser sets it with boundary), add key headers separately
+      const r = await fetch("/api/upload", { method: "POST", headers: kh, body: form });
+      if (!r.ok) throw new Error((await r.json()).detail ?? "Upload failed");
+      return r.json();
+    },
+    async importUrl(url: string) {
+      const r = await fetch("/api/import-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...kh },
+        body: JSON.stringify({ url }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? "Import failed");
+      return r.json();
+    },
+    keyHeaders: kh,
+  };
+}
 
 // ── Simple markdown renderer ──────────────────────────────────────────────────
 function MdText({ text }: { text: string }) {
@@ -375,6 +508,66 @@ function DashboardPanel({
   );
 }
 
+// ── Sheets panel — view + switch + merge sheets/files ─────────────────────────
+function SheetsPanel({
+  sheets,
+  relationships,
+  activeSheet,
+  sheetKey,
+  onSwitch,
+  onMerge,
+  busy,
+}: {
+  sheets: SheetInfo[];
+  relationships: SheetRelationship[];
+  activeSheet: string | null;
+  sheetKey: (s: SheetInfo) => string;
+  onSwitch: (key: string) => void;
+  onMerge: (names: string[], joinKey: string | null) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="sheets-panel">
+      <div className="sheets-label">📑 Sheet / File ({sheets.length})</div>
+      <div className="sheets-list">
+        {sheets.map((s) => {
+          const key = sheetKey(s);
+          const active = key === activeSheet;
+          return (
+            <button
+              key={key}
+              className={`sheet-item${active ? " active" : ""}`}
+              disabled={busy}
+              onClick={() => onSwitch(key)}
+              title={s.column_names.join(", ")}
+            >
+              <span className="sheet-name">{s.name}</span>
+              <span className="sheet-meta">{s.rows.toLocaleString()}×{s.columns}</span>
+              {active && <span className="sheet-active-dot">●</span>}
+            </button>
+          );
+        })}
+      </div>
+      {relationships.filter((r) => r.join_key).length > 0 && (
+        <div className="sheets-rels">
+          <div className="sheets-rel-label">Có thể gộp:</div>
+          {relationships.filter((r) => r.join_key).map((r, i) => (
+            <button
+              key={i}
+              className="sheet-merge-btn"
+              disabled={busy}
+              onClick={() => onMerge([r.sheet1, r.sheet2], r.join_key)}
+              title={`Join trên ${r.join_key}`}
+            >
+              ⇄ {r.sheet1.split("::").pop()} + {r.sheet2.split("::").pop()}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   const [sessionId, setSessionId] = useState("");
@@ -389,15 +582,37 @@ function App() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [allCharts, setAllCharts] = useState<ChartSpec[]>([]);
   const [reportId, setReportId] = useState("");
+  const [sheets, setSheets] = useState<SheetInfo[]>([]);
+  const [relationships, setRelationships] = useState<SheetRelationship[]>([]);
+  const [activeSheet, setActiveSheet] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [importTab, setImportTab] = useState<"file" | "sheets" | "url">("file");
+  const [importTab, setImportTab] = useState<"file" | "url">("file");
   const [importUrl, setImportUrl] = useState("");
-  const [importSheet, setImportSheet] = useState("");
-  const [importSheetName, setImportSheetName] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [apiKeys, setApiKeys] = useState(loadKeys);
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Rebuild only when keys change — send() closes over this via useCallback deps,
+  // so a stale `api` would keep sending the old API-key headers after Settings save.
+  const api = useMemo(() => makeApi(apiKeys), [apiKeys]);
+  const hasKey = !!(apiKeys.gemini || apiKeys.anthropic);
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  // Reconstruct the storage key ("file::sheet") from a SheetInfo.
+  const sheetKey = (s: SheetInfo) =>
+    s.file_name && s.file_name !== s.name ? `${s.file_name}::${s.name}` : s.name;
+
+  function fetchDashboard(sid: string) {
+    fetch(`/api/dashboard/${sid}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((dash: DashboardData | null) => {
+        if (!dash || !dash.kpi_cards?.length) return;
+        setDashboardData(dash);
+      })
+      .catch(() => {});
+  }
 
   function applyUploadResponse(d: Record<string, unknown>) {
     const sid = d.session_id as string;
@@ -406,20 +621,89 @@ function App() {
     setPreviewCols((d.preview_columns as string[]) ?? []);
     setPreviewRows((d.preview_rows as Record<string, string>[]) ?? []);
     setSuggestions((d.suggested_queries as string[]) ?? []);
+    setActiveSheet((d.active_sheet as string) ?? null);
     setMessages([]);
     setAllCharts([]);
     setDashboardData(null);
+    setSheets([]);
+    setRelationships([]);
     setTab("preview");
 
-    // Auto-fetch AI dashboard in background — tab appears in nav, user clicks when ready
-    fetch(`/api/dashboard/${sid}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((dash: DashboardData | null) => {
-        if (!dash || !dash.kpi_cards?.length) return;
-        setDashboardData(dash);
-        // Do NOT auto-switch — let user navigate to Dashboard when they want
-      })
-      .catch(() => {});
+    // Multi-sheet / multi-file workbook → load the sheet inventory so the user can
+    // see + switch which sheet is analyzed (no more silent single-sheet selection).
+    const sheetNames = (d.sheet_names as string[]) ?? [];
+    if (sheetNames.length > 1) {
+      fetch(`/api/sheets/${sid}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((s) => {
+          if (!s) return;
+          setSheets((s.sheets as SheetInfo[]) ?? []);
+          setRelationships((s.relationships as SheetRelationship[]) ?? []);
+        })
+        .catch(() => {});
+    }
+
+    fetchDashboard(sid);
+  }
+
+  // Apply an ActiveSheetResponse / MergeSheetsResponse refresh payload.
+  // Switching sheet / merging = a different DataFrame, so chat history, charts and
+  // the report from the previous frame no longer apply — clear them.
+  function applyRefresh(d: Record<string, unknown>) {
+    setProfile(d.profile as Profile);
+    setPreviewCols((d.preview_columns as string[]) ?? []);
+    setPreviewRows((d.preview_rows as Record<string, string>[]) ?? []);
+    if (d.suggested_queries) setSuggestions(d.suggested_queries as string[]);
+    setActiveSheet((d.active_sheet as string) ?? null);
+    setMessages([]);
+    setAllCharts([]);
+    setReportId("");
+    setDashboardData(null);          // force dashboard recompute for the new frame
+    fetchDashboard(sessionId);
+  }
+
+  async function switchSheet(key: string) {
+    if (!sessionId || key === activeSheet) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/session/${sessionId}/active-sheet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheet_name: key }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? "Đổi sheet thất bại");
+      applyRefresh(await r.json());
+      setTab("preview");
+    } catch (e: unknown) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function mergeSheets(names: string[], joinKey: string | null) {
+    if (!sessionId || names.length < 2) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/merge-sheets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, sheet_names: names, join_key: joinKey || undefined }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? "Gộp sheet thất bại");
+      const resp = await r.json();
+      applyRefresh(resp);
+      // Refresh sheet inventory so the new merged sheet shows up.
+      fetch(`/api/sheets/${sessionId}`)
+        .then((x) => (x.ok ? x.json() : null))
+        .then((s) => { if (s) { setSheets(s.sheets ?? []); setRelationships(s.relationships ?? []); } })
+        .catch(() => {});
+      setTab("preview");
+    } catch (e: unknown) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleFiles(files: FileList | File[]) {
@@ -450,19 +734,6 @@ function App() {
     }
   }
 
-  async function handleImportGSheet() {
-    if (!importSheet.trim()) return;
-    setBusy(true);
-    try {
-      applyUploadResponse(await api.importGSheet(importSheet.trim(), importSheetName.trim() || undefined));
-      setImportSheet("");
-      setImportSheetName("");
-    } catch (e: unknown) {
-      alert((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   // Streaming send — all modes use /api/chat/stream
   const send = useCallback(async (q: string) => {
@@ -485,7 +756,7 @@ function App() {
     try {
       const resp = await fetch("/api/chat/stream", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...api.keyHeaders },
         body: JSON.stringify({ session_id: sessionId, question: q }),
       });
 
@@ -552,18 +823,34 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }, [sessionId, busy]);
+  }, [sessionId, busy, api]);
 
   const numericCount = profile ? Object.keys(profile.numeric_summary).length : 0;
   const missingCount = profile ? Object.values(profile.missing_values).reduce((a, b) => a + b, 0) : 0;
 
   return (
     <div className="layout">
+      {/* Settings modal */}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => {
+            setApiKeys(loadKeys()); // re-read in case saved
+            setShowSettings(false);
+          }}
+        />
+      )}
+
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="brand">
           <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-            <rect width="26" height="26" rx="7" fill="#6366f1"/>
+            <rect width="26" height="26" rx="7" fill="url(#g)"/>
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#7c3aed"/>
+                <stop offset="100%" stopColor="#ec4899"/>
+              </linearGradient>
+            </defs>
             <rect x="5" y="13" width="4" height="8" rx="1" fill="white"/>
             <rect x="11" y="9" width="4" height="12" rx="1" fill="white"/>
             <rect x="17" y="5" width="4" height="16" rx="1" fill="white"/>
@@ -590,10 +877,10 @@ function App() {
 
         <div className="import-panel">
           <div className="import-tabs">
-            {(["file", "sheets", "url"] as const).map((t) => (
+            {(["file", "url"] as const).map((t) => (
               <button key={t} className={`import-tab${importTab === t ? " active" : ""}`}
                 onClick={() => setImportTab(t)}>
-                {t === "file" && "📁"}{t === "sheets" && "📊"}{t === "url" && "🔗"}
+                {t === "file" && "📁"}{t === "url" && "🔗"}
               </button>
             ))}
           </div>
@@ -613,22 +900,6 @@ function App() {
             </div>
           )}
 
-          {importTab === "sheets" && (
-            <div className="import-form">
-              <input className="import-input" type="text" placeholder="Google Sheets URL hoặc Sheet ID"
-                value={importSheet} onChange={(e) => setImportSheet(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleImportGSheet()} />
-              <input className="import-input" type="text" placeholder="Tên sheet (để trống = sheet đầu tiên)"
-                value={importSheetName} onChange={(e) => setImportSheetName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleImportGSheet()} />
-              <button className="import-btn" disabled={!importSheet.trim() || busy}
-                onClick={handleImportGSheet}>
-                {busy ? "Đang tải…" : "Import từ Sheets"}
-              </button>
-              <div className="import-hint">Sheet phải được chia sẻ với email service account</div>
-            </div>
-          )}
-
           {importTab === "url" && (
             <div className="import-form">
               <input className="import-input" type="text"
@@ -639,10 +910,22 @@ function App() {
                 onClick={handleImportUrl}>
                 {busy ? "Đang tải…" : "Import từ URL"}
               </button>
-              <div className="import-hint">Hỗ trợ CSV public, Google Sheets, Dropbox shared links</div>
+              <div className="import-hint">CSV / XLSX public, Google Sheets share "anyone with link", Dropbox shared links</div>
             </div>
           )}
         </div>
+
+        {sheets.length > 1 && (
+          <SheetsPanel
+            sheets={sheets}
+            relationships={relationships}
+            activeSheet={activeSheet}
+            sheetKey={sheetKey}
+            onSwitch={switchSheet}
+            onMerge={mergeSheets}
+            busy={busy}
+          />
+        )}
 
         {profile && (
           <div className="info-panel">
@@ -672,6 +955,14 @@ function App() {
             ⬇ Download Report
           </a>
         )}
+
+        {/* Settings button — always visible at bottom */}
+        <div className="sidebar-footer">
+          <button className="btn-settings" onClick={() => setShowSettings(true)}>
+            ⚙️ API Keys
+            <span className={`key-indicator${hasKey ? " active" : ""}`} title={hasKey ? "Keys configured" : "No keys — using server .env"} />
+          </button>
+        </div>
       </aside>
 
       {/* Main */}
@@ -697,6 +988,14 @@ function App() {
             ) : (
               <>
                 <div className="panel-head">Data Preview <span className="muted">— first 10 rows</span></div>
+                {sheets.length > 1 && (
+                  <div className="active-sheet-banner">
+                    📑 Đang phân tích: <b>{activeSheet === "__concat__"
+                      ? `Gộp ${sheets.length} sheet cùng cấu trúc`
+                      : (activeSheet?.split("::").pop() ?? activeSheet)}</b>
+                    <span className="muted"> · {sheets.length} sheet — chọn sheet khác ở thanh bên trái</span>
+                  </div>
+                )}
                 <div className="tbl-wrap">
                   <table>
                     <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>

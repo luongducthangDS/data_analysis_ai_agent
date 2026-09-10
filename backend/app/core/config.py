@@ -8,15 +8,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # LLM providers
-    groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash-lite"
+    gemini_models: str = ""  # comma-separated; trống = default list trong llm_service
     google_api_key: str = ""
-    hf_token: str = ""
-    hf_model: str = "Qwen/Qwen2.5-7B-Instruct:fastest"
-    hf_base_url: str = "https://router.huggingface.co/v1"
-    llm_provider: str = "auto"  # auto | groq | gemini | hf
+    # OpenRouter fallback — chuỗi model free thử lần lượt khi Gemini sập.
+    openrouter_api_key: str = ""
+    openrouter_models: str = ""  # comma-separated; trống = dùng default list trong llm_service
+    # Chuỗi fallback khi llm_provider=auto: Gemini → OpenRouter (nhiều model)
+    llm_provider: str = "auto"  # auto | gemini | openrouter
 
     # Observability
     langsmith_api_key: str = ""

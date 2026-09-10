@@ -39,6 +39,7 @@ class SessionModel(Base):
     sheets_context = Column(Text, nullable=True)
     ecommerce_col_map = Column(JSON, nullable=True, default=None)
     detected_platform = Column(String(32), nullable=True, default=None)
+    active_sheet = Column(String(255), nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -70,15 +71,19 @@ class ChatHistoryModel(Base):
 def init_db() -> None:
     """Create all tables if they don't exist. Called once on app startup."""
     Base.metadata.create_all(bind=engine)
-    _migrate_add_ecommerce_columns()
+    _migrate_sessions_columns()
 
 
-def _migrate_add_ecommerce_columns() -> None:
-    """Idempotent: add new columns to existing sessions table (SQLite + PostgreSQL safe)."""
+def _migrate_sessions_columns() -> None:
+    """Idempotent: add columns that post-date the original sessions table
+    (SQLite + PostgreSQL safe). Must list every column added to SessionModel
+    after initial release, or INSERTs silently fail on pre-existing databases."""
     from sqlalchemy import text
     new_cols = [
+        ("owner_id", "VARCHAR(64)"),
         ("ecommerce_col_map", "JSON"),
         ("detected_platform", "VARCHAR(32)"),
+        ("active_sheet", "VARCHAR(255)"),
     ]
     with engine.connect() as conn:
         for col_name, col_type in new_cols:

@@ -13,7 +13,6 @@ requests==2.31.0
 # Agent orchestration
 langgraph==0.2.28
 langchain-core==0.3.15
-langchain-groq==0.2.1
 langchain-google-genai==2.0.4
 
 # Observability
@@ -26,12 +25,7 @@ tenacity==8.5.0
 slowapi==0.1.9
 
 # LLM providers (direct clients — kept for fallback)
-groq>=0.13.0
 google-generativeai>=0.8.0,<0.9.0
-
-# Workspace connectors
-gspread==6.1.2
-google-auth==2.29.0
 
 # Database
 sqlalchemy==2.0.30
