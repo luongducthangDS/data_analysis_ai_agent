@@ -115,7 +115,8 @@ def _load_ground_truths() -> None:
         GROUND_TRUTH["fin_top_country"]         = df.groupby("Country")["  Sales "].sum().idxmax()
         GROUND_TRUTH["fin_top_segment"]         = df.groupby("Segment")["  Sales "].sum().idxmax()
         GROUND_TRUTH["fin_2014_sales"]          = round(float(df[df["Year"] == 2014]["  Sales "].sum()), 0)
-        GROUND_TRUTH["fin_2015_sales"]          = round(float(df[df["Year"] == 2015]["  Sales "].sum()), 0)
+        # NB: dataset chỉ có Year 2013–2014. Câu hỏi về 2015 là edge case (TC35/TC39),
+        #     không có ground truth số — kỳ vọng agent nhận ra "không có dữ liệu 2015".
         GROUND_TRUTH["fin_top_product_profit"]  = df.groupby(" Product ")[ " Profit "].sum().idxmax()
         GROUND_TRUTH["fin_total_units"]         = int(df["Units Sold"].sum())
         GROUND_TRUTH["fin_top_month"]           = df.groupby(" Month Name ")["  Sales "].sum().idxmax()
@@ -264,16 +265,18 @@ TEST_CASES: list[TestCase] = [
              "ranking", "keyword", "fin_top_segment"),
     TestCase(34, "financial_sample", "Năm 2014 có tổng doanh thu là bao nhiêu?",
              "aggregation", "number", "fin_2014_sales"),
+    # Edge: dataset chỉ có 2013–2014 → agent phải nhận ra "không có dữ liệu 2015"
     TestCase(35, "financial_sample", "Năm 2015 có tổng doanh thu là bao nhiêu?",
-             "aggregation", "number", "fin_2015_sales"),
+             "edge", "any", ""),
     TestCase(36, "financial_sample", "Sản phẩm nào mang lại lợi nhuận cao nhất?",
              "ranking", "keyword", "fin_top_product_profit"),
     TestCase(37, "financial_sample", "Tổng số Units Sold trên toàn bộ dataset là bao nhiêu?",
              "aggregation", "number", "fin_total_units"),
     TestCase(38, "financial_sample", "Tháng nào có tổng doanh thu cao nhất?",
              "ranking", "keyword", "fin_top_month"),
+    # Edge: 2015 không tồn tại trong dataset → agent nên nêu rõ thay vì bịa số
     TestCase(39, "financial_sample", "So sánh tổng doanh thu năm 2014 và năm 2015?",
-             "comparison", "any", ""),
+             "edge", "any", ""),
     TestCase(40, "financial_sample", "Top 3 quốc gia có tổng lợi nhuận cao nhất?",
              "ranking", "any", ""),
     TestCase(41, "financial_sample", "Discount Band 'None' chiếm bao nhiêu % trong tổng số records?",
