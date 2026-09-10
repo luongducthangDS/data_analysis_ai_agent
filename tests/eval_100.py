@@ -41,6 +41,14 @@ from typing import Any
 
 import requests
 
+# Windows console mặc định cp1252 → print tiếng Việt raise UnicodeEncodeError.
+# Ép stdout/stderr về UTF-8 để eval chạy được trên mọi nền tảng.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError):
+        pass
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "data" / "samples"
@@ -701,10 +709,13 @@ def run_eval(
     client: APIClient,
     cases: list[TestCase],
     verbose: bool = True,
+    delay: float = 0.0,
 ) -> list[EvalResult]:
     results: list[EvalResult] = []
 
-    for tc in cases:
+    for i, tc in enumerate(cases):
+        if delay and i:
+            time.sleep(delay)  # nới nhịp để không đụng rate-limit LLM free tier
         if verbose:
             print(f"\n[{tc.id:>3}] [{tc.category:<12}] {tc.question[:70]}")
 
@@ -975,6 +986,41 @@ def print_summary(results: list[EvalResult]) -> None:
     print("="*70)
 
 
+def build_summary(results: list[EvalResult]) -> dict[str, Any]:
+    """Tổng hợp số liệu eval thành dict (để ghi JSON làm baseline reproducible)."""
+    from collections import defaultdict
+    total = len(results)
+    cat_stats: dict[str, list[float]] = defaultdict(list)
+    for r in results:
+        cat_stats[r.category].append(r.overall)
+    return {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "total": total,
+        "passed": sum(1 for r in results if r.overall >= 0.7),
+        "avg_overall": round(sum(r.overall for r in results) / total, 3),
+        "avg_no_meta": round(sum(r.no_meta for r in results) / total, 3),
+        "avg_insight": round(sum(r.insight for r in results) / total, 3),
+        "avg_concise": round(sum(r.concise for r in results) / total, 3),
+        "avg_vn_natural": round(sum(r.vn_natural for r in results) / total, 3),
+        "avg_factual_ok": round(sum(r.factual_ok for r in results) / total, 3),
+        "avg_latency_ms": round(sum(r.latency_ms for r in results) / total),
+        "llm_usage_rate": round((total - sum(r.llm_failed for r in results)) / total * 100, 1),
+        "http_errors": sum(1 for r in results if r.http_status not in (200, 0)),
+        "by_category": {
+            cat: {"avg": round(sum(v) / len(v), 3),
+                  "passed": sum(1 for x in v if x >= 0.7),
+                  "total": len(v)}
+            for cat, v in sorted(cat_stats.items())
+        },
+        "failed_ids": [r.id for r in results if r.overall < 0.7],
+    }
+
+
+def save_summary_json(results: list[EvalResult], path: Path) -> None:
+    path.write_text(json.dumps(build_summary(results), ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  → {path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def parse_ids(s: str) -> set[int]:
     ids: set[int] = set()
@@ -996,6 +1042,7 @@ def main() -> None:
     parser.add_argument("--dataset",  default="",             help="Chỉ chạy 1 dataset")
     parser.add_argument("--no-report", action="store_true",   help="Không tạo file báo cáo")
     parser.add_argument("--quiet",    action="store_true",    help="Ít log hơn")
+    parser.add_argument("--delay",    type=float, default=0.0, help="Giãn cách giữa các request (giây) — tránh rate-limit LLM free tier")
     args = parser.parse_args()
 
     print(f"Loading ground truths from datasets...")
@@ -1018,7 +1065,7 @@ def main() -> None:
         cases = [tc for tc in cases if tc.dataset == args.dataset]
     print(f"Chạy {len(cases)} test cases...\n")
 
-    results = run_eval(client, cases, verbose=not args.quiet)
+    results = run_eval(client, cases, verbose=not args.quiet, delay=args.delay)
     print_summary(results)
 
     if not args.no_report and results:
@@ -1026,6 +1073,7 @@ def main() -> None:
         out_base = Path(args.out + f"_{ts}")
         save_csv(results, out_base.with_suffix(".csv"))
         save_html(results, out_base.with_suffix(".html"))
+        save_summary_json(results, out_base.with_suffix(".json"))
 
 
 if __name__ == "__main__":

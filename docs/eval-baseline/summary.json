@@ -1,0 +1,61 @@
+{
+  "timestamp": "2026-09-10T19:14:00",
+  "total": 100,
+  "passed": 97,
+  "avg_overall": 0.895,
+  "avg_no_meta": 0.96,
+  "avg_insight": 0.752,
+  "avg_concise": 0.938,
+  "avg_vn_natural": 0.98,
+  "avg_factual_ok": 0.84,
+  "avg_latency_ms": 75714,
+  "llm_usage_rate": 100.0,
+  "http_errors": 0,
+  "by_category": {
+    "aggregation": {
+      "avg": 0.857,
+      "passed": 37,
+      "total": 39
+    },
+    "bot_info": {
+      "avg": 0.928,
+      "passed": 5,
+      "total": 5
+    },
+    "comparison": {
+      "avg": 0.985,
+      "passed": 4,
+      "total": 4
+    },
+    "edge": {
+      "avg": 0.965,
+      "passed": 12,
+      "total": 12
+    },
+    "language": {
+      "avg": 0.81,
+      "passed": 5,
+      "total": 5
+    },
+    "off_topic": {
+      "avg": 0.8,
+      "passed": 4,
+      "total": 5
+    },
+    "ranking": {
+      "avg": 0.93,
+      "passed": 26,
+      "total": 26
+    },
+    "trend": {
+      "avg": 0.906,
+      "passed": 4,
+      "total": 4
+    }
+  },
+  "failed_ids": [
+    37,
+    46,
+    81
+  ]
+}

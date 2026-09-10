@@ -1,0 +1,267 @@
+id,dataset,category,question,answer,latency_ms,http_status,llm_failed,no_meta,insight,concise,vn_natural,factual_ok,overall,error
+1,sales_sample,aggregation,Tổng doanh thu (sales) là bao nhiêu?,"Tổng doanh thu là 8.950. Con số này cho thấy quy mô kinh doanh hiện tại ở mức vừa phải, cần được theo dõi sát sao theo từng khu vực và danh mục sản phẩm để đánh giá hiệu suất thực tế. Đội ngũ kinh doanh nên tập trung đẩy mạnh các mặt hàng có biên lợi nhuận cao và khai thác thêm tiềm năng từ các vùng",6552.2,200,False,1.0,1.0,1.0,1.0,0.5,0.95,
+2,sales_sample,aggregation,Tổng số lượng (quantity) đã bán là bao nhiêu?,"Tổng số lượng sản phẩm đã bán là 57 đơn vị. Con số này cho thấy quy mô giao dịch hiện tại còn khá nhỏ, phản ánh giai đoạn thử nghiệm hoặc danh mục sản phẩm ngách. Đội ngũ kinh doanh cần nhanh chóng đẩy mạnh các chương trình kích cầu và mở rộng tệp khách hàng để gia tăng sản lượng tiêu thụ trong thời",4225.0,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+3,sales_sample,aggregation,Electronics có tổng doanh thu là bao nhiêu?,"Tổng doanh thu của ngành hàng Electronics là 4.950. Con số này cho thấy dòng sản phẩm điện tử đang đóng góp một lượng doanh thu đáng kể vào tổng quy mô kinh doanh chung. Doanh nghiệp nên tiếp tục duy trì các chiến lược thúc đẩy doanh số hiện tại đối với nhóm hàng này. Đồng thời, cần kết hợp phân tíc",4621.8,200,False,1.0,1.0,1.0,1.0,0.5,0.95,
+4,sales_sample,aggregation,Có bao nhiêu dòng dữ liệu ở khu vực North?,"Chào bạn, với tư cách là Senior Data Analyst, tôi xin tóm tắt tổng quan về dataset `sales_sample.csv` như sau:
+
+1. Dataset có kích thước nhỏ gọn gồm 10 dòng và 5 cột, bao gồm 3 cột số và 2 cột danh mục.
+2. Dữ liệu hoàn toàn sạch sẽ, không có ô nào bị thiếu (missing data = 0).
+3. Cột `sales` (doanh t",4197.4,200,False,1.0,0.4,0.4,1.0,1.0,0.73,
+5,sales_sample,aggregation,Có bao nhiêu danh mục sản phẩm (category) khác nhau?,"Có tổng cộng 3 danh mục sản phẩm khác nhau trong tập dữ liệu, bao gồm Electronics, Furniture và Office Supplies. Các danh mục này phân bổ đều với mỗi danh mục xuất hiện một lần trong dữ liệu thống kê cơ bản. Do số lượng danh mục còn hạn chế, doanh nghiệp cần cân nhắc mở rộng thêm các dòng sản phẩm m",5612.5,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+6,sales_sample,ranking,Danh mục nào có tổng doanh thu cao nhất?,"Danh mục **Electronics** có tổng doanh thu cao nhất đạt 4,950. Doanh thu của danh mục này đang dẫn đầu, cho thấy đây là nhóm sản phẩm chủ lực thu hút lượng lớn khách hàng. Doanh nghiệp nên ưu tiên tập trung nguồn lực marketing và mở rộng danh mục sản phẩm này để tối ưu hóa lợi nhuận.",4595.6,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+7,sales_sample,ranking,Danh mục nào có tổng lợi nhuận thấp nhất?,"Office Supplies là danh mục có tổng lợi nhuận thấp nhất với mức 240. Kết quả này cho thấy nhóm sản phẩm này đang đóng góp rất ít vào biên lợi nhuận chung và có thể đang gánh chịu chi phí vận hành hoặc chiết khấu quá cao. Do đó, cần rà soát lại cơ cấu giá bán, chiết khấu và tối ưu hóa chi phí vận chu",4399.2,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+8,sales_sample,comparison,So sánh tổng doanh thu giữa khu vực North và South?,"Tổng doanh thu của khu vực North đạt 2,350, cao hơn đáng kể so với mức 1,450 của khu vực South. Sự chênh lệch này cho thấy North đang là thị trường chủ lực, chiếm ưu thế rõ rệt trong việc tạo ra doanh thu. Doanh nghiệp nên tập trung nghiên cứu các yếu tố thành công tại North để áp dụng, đồng thời cầ",4649.1,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+9,sales_sample,comparison,Khu vực nào có tổng lợi nhuận cao hơn?,"Khu vực East có tổng lợi nhuận cao hơn với 630 đơn vị, trong khi khu vực West đạt 570 đơn vị. Chênh lệch này cho thấy khu vực East đang kinh doanh hiệu quả hơn về mặt biên lợi nhuận. Doanh nghiệp nên tập trung nghiên cứu các yếu tố thành công tại East để nhân rộng mô hình sang West. Đồng thời, cần đ",4594.1,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+10,sales_sample,aggregation,Profit margin trung bình (profit/sales) của toàn bộ là bao nhiêu?,"Profit margin trung bình của toàn bộ là 21.23% (tổng lợi nhuận 1,900 trên tổng doanh thu 8,950). Mức biên lợi nhuận này cho thấy hoạt động kinh doanh đang duy trì hiệu quả tài chính khá tốt. Đội ngũ quản lý nên tiếp tục phát huy chiến lược giá và kiểm soát chi phí hiện tại, đồng thời phân tích sâu h",4613.1,200,False,1.0,1.0,1.0,1.0,0.0,0.9,
+11,sales_data,aggregation,Tổng doanh thu của toàn bộ dữ liệu là bao nhiêu?,Tổng doanh thu của toàn bộ dữ liệu là 859.045.000 VNĐ. Con số này phản ánh quy mô giao dịch tổng thể khá lớn của doanh nghiệp trong kỳ báo cáo. Bộ phận kinh doanh nên tiếp tục theo dõi sát sao các danh mục sản phẩm chủ lực để duy trì đà tăng trưởng doanh thu này.,4560.0,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+12,sales_data,aggregation,Tổng số lượng sản phẩm đã bán được là bao nhiêu?,"Tổng số lượng sản phẩm đã bán được là 86 sản phẩm. Con số này cho thấy quy mô tiêu thụ hiện tại của cửa hàng đang ở mức khiêm tốn, phản ánh nhu cầu thị trường chưa cao hoặc danh mục sản phẩm chưa thực sự thu hút khách hàng. Đội ngũ kinh doanh cần nhanh chóng triển khai các chương trình khuyến mại, b",4464.4,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+13,sales_data,aggregation,Có bao nhiêu khách hàng duy nhất?,"Có tổng cộng 28 khách hàng duy nhất trong tập dữ liệu. Quy mô tệp khách hàng hiện tại còn khá nhỏ, cho thấy doanh nghiệp đang ở giai đoạn đầu hoặc tập trung vào thị trường ngách rất hẹp. Doanh nghiệp cần nhanh chóng triển khai các chương trình chăm sóc khách hàng thân thiết và thu thập thêm thông ti",4670.6,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+14,sales_data,aggregation,Discount trung bình trên toàn bộ đơn hàng là bao nhiêu %?,"Discount trung bình trên toàn bộ đơn hàng là 4.33%. Mức chiết khấu này khá thấp, cho thấy chiến lược giá hiện tại đang tập trung giữ biên lợi nhuận thay vì kích cầu bằng giảm giá sâu. Doanh nghiệp nên cân nhắc áp dụng các chương trình discount linh hoạt hơn theo từng phân khúc khách hàng hoặc giá tr",4779.3,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+15,sales_data,aggregation,Doanh thu trung bình mỗi đơn hàng là bao nhiêu?,"Doanh thu trung bình mỗi đơn hàng là 28.634.830 VNĐ. Mức giá trị này cho thấy quy mô mỗi giao dịch của khách hàng ở mức khá cao, phản ánh giá trị đơn hàng lớn hoặc số lượng mua nhiều. Doanh nghiệp nên tập trung chăm sóc nhóm khách hàng có giá trị đơn hàng cao và xây dựng các chương trình ưu đãi riên",4626.4,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+16,sales_data,ranking,Sales rep nào có tổng doanh thu cao nhất?,"Phạm Hoa là sales rep có tổng doanh thu cao nhất với 431.850.000. Doanh thu vượt trội này cho thấy đây là nhân sự chủ chốt, có năng lực chốt đơn hàng giá trị cao hoặc số lượng lớn. Doanh nghiệp nên vinh danh, tìm hiểu bí quyết thành công của Phạm Hoa và chia sẻ phương pháp này cho toàn bộ đội ngũ sa",4688.7,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+17,sales_data,ranking,Danh mục sản phẩm nào có tổng doanh thu cao nhất?,"Danh mục sản phẩm Laptop đạt tổng doanh thu cao nhất với 441.175.000, cho thấy đây là sản phẩm chủ lực mang lại giá trị tài chính lớn nhất cho doanh nghiệp. Doanh nghiệp nên tập trung nguồn lực tiếp thị, ưu đãi và đảm bảo nguồn cung cho danh mục Laptop để tối đa hóa lợi nhuận. Bên cạnh đó, cần nghiê",4557.0,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+18,sales_data,ranking,Sản phẩm nào có đơn giá cao nhất?,"Sản phẩm có đơn giá cao nhất là MacBook Air M2 với mức giá 32.000.000 VNĐ. Mức giá vượt trội này cho thấy đây là mặt hàng chủ lực thuộc phân khúc cao cấp, đóng vai trò quan trọng trong việc thúc đẩy doanh thu giá trị cao của doanh nghiệp. Đội ngũ kinh doanh nên ưu tiên xây dựng các chương trình chăm",7750.8,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+19,sales_data,ranking,Khu vực nào có tổng doanh thu lớn nhất?,Khu vực TP.HCM có tổng doanh thu lớn nhất đạt 431850000. Đây là thị trường trọng điểm đóng góp tỷ trọng doanh thu cao nhất vào kết quả kinh doanh chung. Đội ngũ kinh doanh nên tập trung tối ưu hóa nguồn lực và các chương trình ưu đãi tại khu vực này để tiếp tục thúc đẩy tăng trưởng.,4251.7,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+20,sales_data,aggregation,Có bao nhiêu đơn hàng trong tháng 1 năm 2024?,"Có tổng cộng 5 đơn hàng trong tháng 1 năm 2024. 
+
+Khối lượng giao dịch trong tháng mở màn năm mới đang ở mức khá thấp, cho thấy nhu cầu mua sắm của khách hàng có xu hướng chững lại sau giai đoạn cao điểm cuối năm trước. Đội ngũ kinh doanh cần nhanh chóng triển khai các chương trình khuyến mãi đầu nă",4630.2,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+21,sales_data,aggregation,Tổng doanh thu của Trần Minh là bao nhiêu?,Tổng doanh thu của Trần Minh là 224.650.000 VNĐ. Con số này cho thấy khách hàng này đóng góp một nguồn doanh thu đáng kể vào tổng quỹ tài chính của cửa hàng. Bộ phận kinh doanh nên ưu tiên thiết kế các chính sách chăm sóc khách hàng thân thiết và chương trình ưu đãi riêng để duy trì và gia tăng giá ,4514.6,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+22,sales_data,aggregation,Discount cao nhất trong dataset là bao nhiêu %?,Mức discount cao nhất trong dataset là 15%. Mức chiết khấu này đại diện cho biên độ ưu đãi tối đa mà hệ thống từng áp dụng cho các đơn hàng. Bộ phận kinh doanh cần rà soát lại hiệu quả của các đơn hàng có mức discount này để đảm bảo biên lợi nhuận không bị ảnh hưởng tiêu cực.,4323.9,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+23,sales_data,trend,Tháng nào trong năm 2024 có tổng doanh thu cao nhất?,"Tháng 2 năm 2024 ghi nhận tổng doanh thu cao nhất đạt 168.925.000. Doanh thu tập trung đột biến vào giai đoạn đầu năm, có thể do nhu cầu mua sắm chuẩn bị cho các dịp lễ lớn. Đội ngũ kinh doanh cần phân tích sâu hơn các mặt hàng bán chạy trong tháng này để chuẩn bị kế hoạch tồn kho và chương trình kh",4456.0,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+24,sales_data,trend,Doanh thu theo từng tháng thay đổi như thế nào?,"Doanh thu dao động mạnh từ tháng 1 đến tháng 7/2024, đạt đỉnh cao nhất vào tháng 2 (168,9 triệu) và tháng 6 (162,4 triệu), nhưng lao dốc nghiêm trọng xuống mức thấp nhất vào tháng 5 (75,7 triệu) và tháng 7 (14 triệu). Sự sụt giảm đột ngột ở nửa cuối giai đoạn cho thấy tính mùa vụ hoặc vấn đề trong c",4973.7,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+25,sales_data,comparison,So sánh doanh thu của Trần Minh và Phạm Hoa?,"Doanh thu của Phạm Hoa đạt 431.850.000, gấp gần hai lần mức 224.650.000 của Trần Minh. Sự chênh lệch lớn này cho thấy hiệu suất bán hàng của Phạm Hoa vượt trội hơn hẳn, có thể do năng lực cá nhân hoặc khu vực phụ trách thuận lợi hơn. Doanh nghiệp nên tìm hiểu nguyên nhân thành công của Phạm Hoa để c",4832.3,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+26,sales_data,ranking,Top 3 sản phẩm có doanh thu cao nhất?,"Top 3 sản phẩm có doanh thu cao nhất lần lượt là Dell Inspiron 15 (213.675.000), iPhone 15 (213.400.000) và MacBook Air M2 (145.600.000). Hai vị trí dẫn đầu có doanh thu chênh lệch không đáng kể, cho thấy sức mua rất cân bằng giữa dòng laptop phổ thông và điện thoại cao cấp. Doanh nghiệp nên ưu tiên",4548.0,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+27,sales_data,aggregation,Phần trăm đóng góp của từng khu vực vào tổng doanh thu?,"TP.HCM dẫn đầu với 50.3% tổng doanh thu (431,850,000 VNĐ), tiếp theo là Hà Nội chiếm 26.2% (224,650,000 VNĐ), trong khi bốn khu vực còn lại gồm Đà Nẵng, Hải Phòng, Cần Thơ và Huế chỉ đóng góp tổng cộng 23.5%. Doanh thu tập trung cao độ ở hai đô thị lớn (chiếm hơn 76%), thể hiện sự phân hóa rõ rệt và",4889.8,200,False,1.0,1.0,0.7,1.0,1.0,0.94,
+28,sales_data,aggregation,Trung bình số lượng (quantity) mỗi đơn hàng là bao nhiêu?,Trung bình số lượng sản phẩm trong mỗi đơn hàng là 2.87. Con số này cho thấy khách hàng thường mua gom nhiều sản phẩm trong một lần giao dịch thay vì mua lẻ đơn chiếc. Doanh nghiệp nên tận dụng thói quen này để thiết kế các gói combo sản phẩm hoặc chương trình mua kèm giảm giá nhằm đẩy mạnh giá trị ,4308.5,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+29,sales_data,ranking,Đơn hàng nào có doanh thu lớn nhất?,Đơn hàng 1020 có doanh thu lớn nhất đạt 83.600.000 VNĐ từ sản phẩm iPhone 15 do khách hàng Đỗ Văn Sơn đặt mua. Khoản doanh thu vượt trội này cho thấy các sản phẩm công nghệ cao cấp đóng góp tỷ trọng rất lớn vào tổng giá trị giao dịch. Bộ phận kinh doanh nên ưu tiên duy trì các chương trình chăm sóc ,4658.8,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+30,sales_data,ranking,Sản phẩm nào được bán nhiều nhất theo số lượng?,"Sản phẩm được bán nhiều nhất theo số lượng là Chuột Logitech với tổng cộng 18 sản phẩm. Điều này cho thấy Chuột Logitech đang là mặt hàng có nhu cầu tiêu thụ cao nhất và thu hút sự quan tâm lớn từ khách hàng trong danh mục sản phẩm. Do đó, đội ngũ kinh doanh nên ưu tiên đảm bảo nguồn cung ổn định ch",4482.3,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+31,financial_sample,aggregation,Tổng lợi nhuận (Profit) của toàn bộ dữ liệu là bao nhiêu?,"Tổng lợi nhuận của toàn bộ dữ liệu là 0. Số liệu này cho thấy hoạt động kinh doanh đang không sinh lời hoặc dữ liệu đầu vào chưa ghi nhận khoản lợi nhuận nào. Doanh nghiệp cần lập tức rà soát lại giá bán, chi phí sản xuất và các khoản chiết khấu để tìm ra nguyên nhân gây thất thoát.",4607.9,200,False,1.0,0.7,1.0,1.0,0.0,0.825,
+32,financial_sample,ranking,Quốc gia nào có tổng doanh thu cao nhất?,"Quốc gia có tổng doanh thu cao nhất là United States of America. Dữ liệu cho thấy thị trường này đang đóng góp tỷ trọng doanh thu lớn nhất vào tổng quy mô kinh doanh chung. Doanh nghiệp nên ưu tiên duy trì nguồn lực, đẩy mạnh các chiến dịch marketing và tối ưu hóa chuỗi cung ứng tại đây để tối đa hó",4439.2,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+33,financial_sample,ranking,Segment nào có tổng doanh thu cao nhất?,"Không tìm thấy dữ liệu phù hợp vì kết quả phân tích bị thiếu và không hiển thị đầy đủ tổng doanh thu cho từng segment. Doanh nghiệp cần chạy lại truy vấn nhóm theo cột 'Segment' và tính tổng 'Gross Sales' để xác định chính xác phân khúc dẫn đầu. Sau khi có dữ liệu, đội ngũ kinh doanh nên ưu tiên phâ",4418.8,200,False,1.0,1.0,1.0,1.0,0.0,0.9,
+34,financial_sample,aggregation,Năm 2014 có tổng doanh thu là bao nhiêu?,"Không tìm thấy dữ liệu phù hợp để xác định tổng doanh thu năm 2014 từ tập dữ liệu hiện tại (kết quả trả về bằng 0). Do thiếu hụt thông tin về thời gian và doanh thu chi tiết, bộ phận dữ liệu cần kiểm tra lại cấu trúc trường ngày tháng (Date) trong nguồn dữ liệu gốc. Đề xuất bổ sung cột thời gian vào",4617.9,200,False,1.0,0.7,1.0,1.0,0.0,0.825,
+35,financial_sample,edge,Năm 2015 có tổng doanh thu là bao nhiêu?,Không tìm thấy dữ liệu phù hợp để xác định tổng doanh thu năm 2015 do kết quả phân tích trả về giá trị trống. Việc thiếu hụt dữ liệu này có thể do tập dữ liệu không bao phủ năm 2015 hoặc các trường doanh thu chưa được ghi nhận đầy đủ. Đề xuất kiểm tra lại nguồn dữ liệu gốc và bổ sung thông tin thời ,4562.7,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+36,financial_sample,ranking,Sản phẩm nào mang lại lợi nhuận cao nhất?,"Sản phẩm **Montana** mang lại tổng lợi nhuận cao nhất trong danh mục. Dòng sản phẩm này đóng góp tỷ trọng doanh thu áp đảo so với các sản phẩm còn lại, cho thấy sức hút mạnh mẽ đối với khách hàng. Doanh nghiệp nên ưu tiên duy trì nguồn cung, đẩy mạnh các chiến dịch marketing và tối ưu hóa chi phí sả",4393.8,200,False,1.0,1.0,1.0,1.0,0.0,0.9,
+37,financial_sample,aggregation,Tổng số Units Sold trên toàn bộ dataset là bao nhiêu?,,3430247.7,0,False,0,0,0,0,0,0.0,"Request lỗi: HTTPConnectionPool(host='localhost', port=8788): Read timed out. (read timeout=60)"
+38,financial_sample,ranking,Tháng nào có tổng doanh thu cao nhất?,"Không tìm thấy dữ liệu phù hợp để xác định chính xác tháng nào có tổng doanh thu cao nhất do kết quả phân tích bị thiếu hoặc không hiển thị đầy đủ theo từng tháng. 
+
+Cần tiến hành truy vấn lại dữ liệu doanh thu được nhóm theo cột `Month Name` để có con số cụ thể cho từng tháng. Sau khi có kết quả, d",1023301.8,200,False,1.0,1.0,1.0,1.0,0.0,0.9,
+39,financial_sample,edge,So sánh tổng doanh thu năm 2014 và năm 2015?,"Không tìm thấy dữ liệu phù hợp vì kết quả phân tích chỉ hiển thị năm 2013 và 2014, hoàn toàn thiếu thông tin về năm 2015. 
+
+* **Insight:** Dữ liệu hiện tại bị thiếu mốc thời gian năm 2015 để tiến hành so sánh theo yêu cầu.
+* **Hành động đề xuất:** Cần bổ sung và làm sạch lại dataset để bao gồm đầy đ",66085.6,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+40,financial_sample,ranking,Top 3 quốc gia có tổng lợi nhuận cao nhất?,"Top 3 quốc gia có tổng lợi nhuận cao nhất lần lượt là United States of America, Canada và Germany. Mặc dù các quốc gia này đều tạo ra dòng lợi nhuận lớn với nhiều khoản thu khác nhau, dữ liệu hiện tại chưa cung cấp giá trị số tổng cụ thể để so sánh chính xác khoảng cách giữa các thị trường. Do đó, đ",8799.6,200,False,1.0,0.4,0.7,1.0,1.0,0.79,
+41,financial_sample,aggregation,Discount Band 'None' chiếm bao nhiêu % trong tổng số records?,Discount Band 'None' chiếm 100% tổng số records trong tập dữ liệu hiện tại (53/53 bản ghi). Điều này cho thấy toàn bộ các giao dịch ghi nhận trong dữ liệu đều không áp dụng bất kỳ chương trình giảm giá nào. Đội ngũ kinh doanh cần nhanh chóng xem xét lại chiến lược định giá và khuyến mãi để kích thíc,4468.5,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+42,financial_sample,aggregation,Government segment chiếm bao nhiêu phần trăm tổng doanh thu?,Không tìm thấy dữ liệu phù hợp để tính toán chính xác phần trăm doanh thu của Government segment vì bảng kết quả chỉ hiển thị các giá trị doanh thu rời rạc theo từng giao dịch thay vì tổng doanh thu đã được cộng dồn. Doanh thu của phân khúc Government xuất hiện ở nhiều mức giá trị khác nhau nhưng dữ,7663.9,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+43,financial_sample,aggregation,Sản phẩm nào có Gross Sales cao nhất trong năm 2014?,"# Executive Data Brief
+
+## Kết quả phân tích (lọc: Year = 2014)
+Câu hỏi: Sản phẩm nào có Gross Sales cao nhất trong năm 2014?
+
+|  Product  | Gross Sales cao nhất |
+| --- | --- |
+|  Carretera  |  $ 998,200.00  |",778845.3,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+44,financial_sample,aggregation,Profit margin trung bình của từng Segment là bao nhiêu?,"Dựa trên context được cung cấp, dưới đây là phân tích theo yêu cầu:
+
+**Tóm tắt điều hành**
+- Phạm vi phân tích tập trung vào Profit margin trung bình của từng Segment dựa trên dataset gồm 700 dòng và 16 cột. Không phát hiện missing values ở bảng phân tích chính.
+
+**Phát hiện chính**
+- Context hiện t",5444.4,200,False,1.0,1.0,0.4,1.0,1.0,0.88,
+45,financial_sample,aggregation,Có bao nhiêu giao dịch (records) trong dataset này?,"Dataset này có tổng cộng 700 giao dịch ghi nhận. 
+
+Với quy mô 700 bản ghi trên 8 cột hiển thị, tập dữ liệu cung cấp góc nhìn toàn diện về hoạt động bán hàng theo phân khúc, quốc gia và sản phẩm. Đội ngũ kinh doanh có thể tận dụng lượng dữ liệu này để phân tích sâu hơn về hiệu suất sản phẩm và xu hướ",4987.7,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+46,general_ledger,aggregation,Tổng Debit của toàn bộ sổ cái là bao nhiêu?,,1493162.1,0,False,0,0,0,0,0,0.0,"Request lỗi: HTTPConnectionPool(host='localhost', port=8788): Read timed out. (read timeout=60)"
+47,general_ledger,aggregation,Tổng Credit của toàn bộ sổ cái là bao nhiêu?,"Tổng Credit của tài khoản COGS trong sổ cái là 0.0 (tính gộp trên 5 loại tiền tệ AUD, CAD, EUR, GBP, USD). Do dữ liệu gộp nhiều đồng tiền khác nhau, con số này chưa phản ánh chính xác giá trị thực tế nếu chưa quy đổi tỷ giá. Cần chuẩn hóa toàn bộ giao dịch về một đồng tiền tệ chung trước khi lập báo",4441.8,200,False,1.0,0.4,1.0,1.0,0.0,0.75,
+48,general_ledger,aggregation,Net balance (Debit trừ Credit) là bao nhiêu?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Net balance (Debit trừ Credit) là bao nhiêu?
+
+⚠️  Dữ liệu có 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD). Tổng số được tính gộp nhiều currency — cần quy đổi để so sánh chính xác.
+
+### Xếp hạng / kết quả
+1. 1210240.47: 1,210,240.4700 (100.0%)",4719.5,200,False,1.0,0.4,1.0,1.0,0.0,0.75,
+49,general_ledger,ranking,Account nào có tổng Credit cao nhất?,"Account **Online Sales** dẫn đầu với tổng Credit đạt 1,014,147.86. Tuy nhiên, con số này đang gộp chung 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD) nên chưa phản ánh chính xác giá trị thực tế do chưa được quy đổi tỷ giá. Đội ngũ tài chính cần chuẩn hóa toàn bộ giao dịch về một đồng tiền tệ chung (ví dụ",4510.7,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+50,general_ledger,ranking,Phòng ban (Dept) nào có tổng Debit lớn nhất?,"Phòng ban HR có tổng Debit lớn nhất với giá trị 227,069.82. Tuy nhiên, kết quả này hiện gộp chung 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD) nên chưa phản ánh chính xác thực tế. Do đó, doanh nghiệp cần quy đổi toàn bộ các giao dịch về một đồng tiền tệ chung (như USD) trước khi đưa ra các quy",4599.6,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+51,general_ledger,aggregation,Dataset có bao nhiêu giao dịch (rows)?,"Dataset có tổng cộng 2.000 giao dịch được ghi nhận trên 10 cột dữ liệu. Tuy nhiên, các giao dịch này đang gộp chung 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD) mà chưa được quy đổi. 
+
+Do đó, các bộ phận phân tích cần thực hiện quy đổi tỷ giá về một đồng tiền chuẩn trước khi tiến hành so sánh ",4391.9,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+52,general_ledger,ranking,Currency nào được dùng nhiều nhất?,"CAD hiện là đồng tiền có số lượng giao dịch cao nhất với 413 lần ghi nhận trong tập dữ liệu. Tuy nhiên, do dữ liệu còn bao gồm 4 loại tiền tệ khác (AUD, EUR, GBP, USD) nhưng chưa được quy đổi, kết quả này chưa phản ánh chính xác quy mô tổng thể. Do đó, cần chuẩn hóa toàn bộ các giao dịch về một đồng",4683.1,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+53,general_ledger,ranking,CostCenter nào xuất hiện nhiều nhất?,"CostCenter xuất hiện nhiều nhất là **CC200** với 411 giao dịch. Tuy nhiên, do dữ liệu gộp từ 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD), số lượng giao dịch này chưa phản ánh chính xác quy mô giá trị tài chính thực tế. Cần quy đổi toàn bộ các giao dịch về một đồng tiền chung (ví dụ: USD) trướ",4341.7,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+54,general_ledger,aggregation,Có bao nhiêu AccountNumber duy nhất trong dataset?,"Dataset hiện có tổng cộng 5 AccountNumber duy nhất, được tính gộp từ 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD). Do dữ liệu chứa đa tiền tệ, việc cộng gộp trực tiếp các giá trị số dư hoặc giao dịch có thể gây sai lệch nghiêm trọng. Đề xuất cần thực hiện quy đổi tất cả các khoản giao dịch về ",15825.5,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+55,general_ledger,aggregation,Dept Sales có tổng Credit là bao nhiêu?,"Tổng Credit của phòng Sales là 327,128.81. Con số này hiện được tổng hợp gộp từ 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD) nên cần được quy đổi về một đồng tiền chung để đảm bảo tính chính xác cho việc so sánh và báo cáo tài chính. Đội ngũ tài chính cần chuẩn hóa tỷ giá hối đoái theo thời đi",4703.7,200,False,1.0,0.7,1.0,1.0,0.0,0.825,
+56,general_ledger,comparison,So sánh tổng Debit và Credit giữa các Department?,"Finance dẫn đầu về tổng Credit (361,822.40) và Operations có tổng Debit thấp nhất (176,130.68), trong khi tổng Credit của các phòng ban nhìn chung cao hơn đáng kể so với Debit. Sự chênh lệch lớn này cho thấy dòng tiền đang tập trung mạnh vào các khoản ghi có (Credit) ở mọi bộ phận, phản ánh khả năng",4811.7,200,False,1.0,1.0,0.7,1.0,1.0,0.94,
+57,general_ledger,trend,Tháng nào có số lượng giao dịch nhiều nhất?,"Tháng 5/2024 có số lượng giao dịch nhiều nhất với tổng cộng 82 giao dịch. Tuy nhiên, do dữ liệu bao gồm 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD), con số này hiện được tính gộp và chưa phản ánh chính xác quy mô thực tế. Đề xuất cần chuẩn hóa toàn bộ các giao dịch sang một loại tiền tệ gốc (",4651.7,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+58,general_ledger,ranking,AccountName nào có số lần xuất hiện nhiều nhất?,"AccountName có số lần xuất hiện nhiều nhất là Travel Expense với 412 lần. Do dữ liệu gộp chung 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD), tần suất xuất hiện này có thể chưa phản ánh đúng quy mô giá trị thực tế do chưa quy đổi tỷ giá. Do đó, cần chuẩn hóa toàn bộ giao dịch về một đồng tiền chung (ví d",4332.4,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+59,general_ledger,aggregation,Phân tích tỷ trọng Debit theo từng Department?,"Phòng HR chiếm tỷ trọng Debit lớn nhất với 227,069.82, tiếp theo sát là Sales (204,958.64) và IT (201,893.42), trong khi Operations thấp nhất với 176,130.68. Chi phí Debit phân bổ khá đồng đều giữa các phòng ban, dao động trong khoảng hẹp từ 176K đến 227K. Tuy nhiên, do dữ liệu gộp từ 5 loại tiền tệ",4681.9,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+60,general_ledger,ranking,Giao dịch nào có giá trị Debit lớn nhất?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Giao dịch nào có giá trị Debit lớn nhất?
+
+⚠️  Dữ liệu có 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD). Tổng số được tính gộp nhiều currency — cần quy đổi để so sánh chính xác.
+
+### Xếp hạng / kết quả
+1. GL001279: 1,999.5200 (100.0%)",4478.9,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+61,expense_claims,aggregation,Tổng số tiền claims là bao nhiêu?,"Tổng số tiền claims là 398,548.35 đơn vị, tuy nhiên con số này chưa phản ánh chính xác thực tế vì gộp chung 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD) mà chưa quy đổi tỷ giá. Do đó, doanh nghiệp cần chuẩn hóa tất cả các giao dịch về một đồng tiền gốc (như USD) trước khi thực hiện các báo cáo",4359.4,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+62,expense_claims,ranking,Category chi tiêu nào có tổng Amount cao nhất?,"Category có tổng Amount cao nhất hiện tại là Supplies với 84,938.56, tuy nhiên con số này chưa chính xác vì được cộng gộp từ 5 loại tiền tệ khác nhau mà chưa quy đổi tỷ giá. Do dữ liệu đa tiền tệ, việc so sánh trực tiếp các giá trị này có thể dẫn đến sai lệch lớn trong báo cáo tài chính. Đề xuất quy",4705.1,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+63,expense_claims,ranking,Manager nào (ApprovedBy) phê duyệt nhiều claims nhất?,"MgrB là người phê duyệt nhiều claims nhất với tổng cộng 356 claims. Do dữ liệu bao gồm 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD), số lượng claim này cần được quy đổi về một chuẩn chung để đánh giá chính xác giá trị tài chính thực tế mà quản lý này đã duyệt. Đề xuất bộ phận tài chính xây dựn",4333.7,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+64,expense_claims,aggregation,Bao nhiêu claims có Status là 'Paid'?,"Có tổng cộng 232 claims có trạng thái 'Paid' tính gộp trên các loại tiền tệ khác nhau. Do dữ liệu bao gồm 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD), con số này chưa phản ánh chính xác giá trị thực tế do chưa được quy đổi về một đơn vị tiền tệ chung. Đề xuất bộ phận tài chính cần chuẩn hóa tỷ giá quy ",4544.9,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+65,expense_claims,aggregation,Bao nhiêu claims có Status là 'Submitted' (chưa xử lý)?,"Hiện có 247 claims đang ở trạng thái 'Submitted' (chưa xử lý). Do các khoản này sử dụng 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD), bộ phận tài chính cần quy đổi sang một đồng tiền chung để đánh giá chính xác tổng rủi ro dòng tiền. Đề xuất ưu tiên phân công nhân sự xử lý nhanh nhóm claims nà",4600.9,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+66,expense_claims,aggregation,Số tiền claim trung bình mỗi lần là bao nhiêu?,"Số tiền claim trung bình mỗi lần là 398.55 đơn vị tiền tệ. Tuy nhiên, con số này được tính gộp từ 5 loại tiền tệ khác nhau (AUD, CAD, EUR, GBP, USD) nên chưa phản ánh chính xác giá trị thực tế. Đội ngũ tài chính cần quy đổi toàn bộ các khoản claim về một đồng tiền chuẩn (ví dụ: USD) dựa trên tỷ giá ",4329.7,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+67,expense_claims,aggregation,Có bao nhiêu nhân viên (EmployeeID) khác nhau?,"Dataset hiện có tổng cộng 120 nhân viên khác nhau đã thực hiện các yêu cầu bồi hoàn. Việc dữ liệu bao gồm 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD) có thể làm chênh lệch các báo cáo tổng hợp chi phí nếu chưa được quy đổi về một chuẩn chung. Do đó, đội ngũ tài chính cần áp dụng tỷ giá hối đoái theo th",4479.7,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+68,expense_claims,ranking,Nhân viên nào có tổng số tiền claims cao nhất?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Nhân viên nào có tổng số tiền claims cao nhất?
+
+⚠️  Dữ liệu có 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD). Tổng số được tính gộp nhiều currency — cần quy đổi để so sánh chính xác.
+
+### Xếp hạng / kết quả
+1. E1057: 8,052.2000 (100.0%)",8283.6,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+69,expense_claims,aggregation,Phân tích tỷ lệ Paid/Submitted/Rejected trong dataset?,"Tỷ lệ các trạng thái bồi hoàn hiện phân bổ khá đồng đều, với Rejected chiếm cao nhất (28.2%), tiếp theo là Submitted (24.7%), Approved (23.9%) và thấp nhất là Paid (23.2%) trên tổng số 1,000 claims. Việc tỷ lệ Paid thấp hơn đáng kể so với Approved cho thấy có điểm nghẽn trong khâu giải ngân tài chín",4668.6,200,False,1.0,1.0,0.7,1.0,1.0,0.94,
+70,expense_claims,trend,Tháng nào trong năm có số lượng claims nhiều nhất?,"Tháng 12/2023 là thời điểm ghi nhận số lượng claims nhiều nhất với 49 yêu cầu. Tuy nhiên, việc gộp chung 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD) có thể làm sai lệch bức tranh chi phí thực tế do chưa tính đến tỷ giá quy đổi. Đội ngũ tài chính cần chuẩn hóa toàn bộ dữ liệu về một đồng tiền chung trướ",36122.2,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+71,viet_relational,aggregation,Có bao nhiêu khách hàng trong hệ thống?,"Hệ thống hiện có tổng cộng 32 khách hàng. Con số này cho thấy quy mô cơ sở khách hàng hiện tại còn khá nhỏ, đòi hỏi các chiến lược kích cầu và mở rộng thị trường mạnh mẽ hơn. Doanh nghiệp nên tập trung vào các chương trình chăm sóc khách hàng thân thiết để nâng cao tỷ lệ giữ chân, đồng thời triển kh",4372.4,200,False,1.0,1.0,1.0,1.0,0.0,0.9,
+72,viet_relational,ranking,Sản phẩm nào có giá bán cao nhất?,"Sản phẩm **P002** có giá bán cao nhất đạt 32.000.000 VNĐ. Mức giá vượt trội này cho thấy P002 thuộc phân khúc sản phẩm cao cấp, đóng vai trò chủ lực trong việc nâng cao giá trị đơn hàng trung bình. Doanh nghiệp cần ưu tiên dành các chính sách chăm sóc đặc biệt và chiến lược tiếp thị riêng cho dòng s",4391.1,200,False,1.0,1.0,1.0,1.0,0.0,0.9,
+73,viet_relational,ranking,Sales rep nào có target doanh thu tháng cao nhất?,"Phạm Hoa là sales rep có target doanh thu tháng cao nhất với mức 400.000.000. Khoảng cách này cho thấy cô đang gánh chỉ tiêu lớn nhất nhóm, phản ánh kỳ vọng cao về năng lực bán hàng hoặc danh 
+sách khách hàng trọng điểm. Cần đánh giá lại tính khả thi của mục tiêu này và xem xét phân bổ lại nguồn lực",4480.4,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+74,viet_relational,aggregation,Có bao nhiêu đơn hàng trong hệ thống?,"Hệ thống hiện có tổng cộng 32 đơn hàng. Số lượng đơn hàng này phản ánh quy mô giao dịch hiện tại còn khá nhỏ, cho thấy doanh nghiệp có thể đang trong giai đoạn đầu vận hành hoặc tập trung vào các đơn hàng giá trị cao. Đội ngũ kinh doanh cần nhanh chóng đẩy mạnh các chiến dịch marketing và chương trì",4965.5,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+75,viet_relational,ranking,Phương thức thanh toán nào được dùng nhiều nhất?,"Phương thức thanh toán được dùng nhiều nhất là Chuyển khoản với tổng cộng 16 đơn hàng. Do dữ liệu chỉ ghi nhận một hình thức duy nhất, khách hàng hiện có xu hướng hoàn toàn phụ thuộc vào kênh thanh toán này. Doanh nghiệp nên duy trì ổn định hệ thống ngân hàng số và xem xét bổ sung các cổng thanh toá",4643.5,200,False,1.0,0.7,1.0,1.0,1.0,0.925,
+76,sales_sample,bot_info,Bạn là AI gì? Bạn có thể làm gì?,"Chào bạn! Tôi là trợ lý phân tích dữ liệu AI của bạn. 
+
+Tôi đã nhận được file sales_sample.csv với 10 dòng dữ liệu và các cột gồm category, region, sales, profit, quantity.
+
+Để bắt đầu, bạn có thể hỏi tôi những câu hỏi như:
+1. Tổng doanh thu (sales) và lợi nhuận (profit) theo từng danh mục (category",3372.5,200,False,1.0,1.0,0.7,1.0,1.0,0.94,
+77,sales_sample,bot_info,Hệ thống này có thể phân tích file Excel không?,"Không tìm thấy dữ liệu phù hợp để xác định khả năng phân tích file Excel của hệ thống. Dữ liệu hiện tại chỉ gồm 10 dòng với các chỉ số sales, profit, quantity theo category và region, chưa thể hiện tính năng đọc file. Cần bổ sung tài liệu kỹ thuật hoặc kiểm tra trực tiếp tính năng upload file của hệ",4379.4,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+78,sales_sample,bot_info,Bạn hỗ trợ những loại câu hỏi nào về dữ liệu?,"Dữ liệu hiện tại ghi nhận tổng cộng 4 bản ghi thuộc danh mục Electronics, cho thấy đây là mảng sản phẩm đang được theo dõi trong hệ thống. Với tập dữ liệu hiện tại còn hạn chế, các phân tích sâu hơn về doanh số, lợi nhuận hay xu hướng theo khu vực chưa thể thực hiện đầy đủ. Do đó, cần bổ sung thêm d",4666.1,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+79,sales_sample,bot_info,Tool này có thể vẽ biểu đồ không?,"Không tìm thấy dữ liệu phù hợp để trả lời câu hỏi này trong tập dữ liệu hiện tại. Dataset chỉ bao gồm 10 bản ghi với các thông tin về danh mục, khu vực, doanhنج, lợi nhuận và số lượng, hoàn toàn không chứa thông tin về tính năng vẽ biểu đồ của tool. Cần bổ sung tài liệu kỹ thuật hoặc tính năng của t",4674.5,200,False,0.0,1.0,1.0,1.0,1.0,0.7,
+80,sales_sample,bot_info,Làm thế nào để tôi sử dụng hệ thống này hiệu quả?,"Không tìm thấy dữ liệu phù hợp để đưa ra hướng dẫn sử dụng hệ thống hiệu quả. Dataset hiện tại chỉ có 10 bản ghi tổng hợp và thiếu các thông tin chi tiết về tính năng hay hành vi người dùng. Do đó, tôi đề nghị bổ sung dữ liệu chi tiết hơn về log hệ thống hoặc khảo sát người dùng trước khi tiến hành ",4792.1,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+81,sales_sample,off_topic,Thủ đô của nước Pháp là đâu?,"Không tìm thấy dữ liệu phù hợp để trả lời câu hỏi về thủ đô của nước Pháp trong tập dữ liệu hiện tại (dữ liệu chỉ chứa các chỉ số sales, profit và quantity). Tuy nhiên, dựa trên tập dữ liệu này, chỉ số quan trọng nhất là tổng doanh số (sales) đạt 8.950 với lợi nhuận 1.900, cho thấy biên lợi nhuận kh",27014.3,200,False,0.0,0.3,1.0,1.0,1.0,0.525,
+82,sales_sample,off_topic,Hãy viết cho tôi một bài thơ về mùa xuân,"Mùa xuân về trên cánh én chao nghiêng,
+Doanh thu đạt mức tám nghìn chín trăm,
+Lợi nhuận theo dòng hoa nở thắm tươi.
+Số lượng năm bảy vươn chồi non biếc,
+Đón chào năm mới phát tài, thành công!",9276.6,200,False,1.0,0.3,1.0,1.0,1.0,0.825,
+83,sales_sample,off_topic,Tôi nên đầu tư vào cổ phiếu nào trong năm nay?,"Không tìm thấy dữ liệu phù hợp để đưa ra khuyến nghị đầu tư cổ phiếu. Bộ dữ liệu hiện tại chỉ cung cấp tổng doanh thu 8.950 và tổng lợi nhuận 1.900, hoàn toàn thiếu thông tin về mã chứng khoán hay hiệu suất tài chính của từng công ty. Do đó, bạn không nên dựa vào các chỉ số tổng hợp này để chọn mã c",24899.1,200,False,1.0,0.3,1.0,1.0,1.0,0.825,
+84,sales_sample,off_topic,Dạy tôi cách nấu món phở bò truyền thống,Không tìm thấy dữ liệu phù hợp. Dữ liệu hiện tại chỉ cung cấp,14894.8,200,False,1.0,0.3,1.0,1.0,1.0,0.825,
+85,sales_sample,off_topic,Dự báo thời tiết Hà Nội tuần này thế nào?,Tôi là trợ lý **phân tích dữ liệu** và chỉ có thể trả lời câu hỏi liên quan đến file dữ liệu bạn đã upload. Hãy đặt câu hỏi về dataset của bạn nhé! 📊,2085.7,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+86,sales_sample,edge,Dữ liệu này có bao nhiêu dòng và bao nhiêu cột?,"Chào bạn, dưới đây là tổng quan nhanh về dataset `sales_sample.csv` dưới lăng kính của một Senior Data Analyst:
+
+1. Dataset có kích thước nhỏ gọn gồm **10 dòng và 5 cột**, bao gồm 3 cột số và 2 cột danh mục.
+2. Dữ liệu hoàn toàn **sạch và không có giá trị bị thiếu (missing data)**.
+3. Về các cột số:",8437.2,200,False,1.0,1.0,0.4,1.0,1.0,0.88,
+87,sales_data,edge,Có giá trị bị thiếu (null/missing) trong dataset không?,"Dataset có chứa giá trị bị thiếu ở các cột `quantity` (86 giá trị) và `discount_pct` (130 giá trị), bên cạnh các cột `order_id` (30,465 giá trị) và `unit_price` (429,000,000). Sự thiếu hụt dữ liệu này có thể làm sai lệch các phép tính tổng doanh thu và số lượng bán hàng nếu không được xử lý kịp thời",32383.3,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+88,sales_data,edge,So sánh doanh thu năm nay với năm ngoái (nếu dữ liệu chỉ có 1 năm),"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: So sánh doanh thu năm nay với năm ngoái (nếu dữ liệu chỉ có 1 năm)
+
+### Xếp hạng / kết quả
+1. Bùi Thị Yến: 30,400,000 (9.0%)
+2. Bùi Văn Giang: 54,400,000 (16.1%)
+3. Chu Văn Zung: 6,800,000 (2.0%)
+4. Công ty ABC: 28,800,000 (8.5%)
+5. Công ty DEF: ",21384.7,200,False,1.0,1.0,0.7,1.0,1.0,0.94,
+89,sales_data,edge,Dự báo doanh thu tháng tới dựa trên xu hướng hiện tại,"Doanh thu trung bình 7 tháng qua đạt khoảng 61,3 triệu VNĐ/",14298.7,200,False,1.0,0.5,1.0,1.0,1.0,0.875,
+90,sales_sample,edge,Cho tôi xem toàn bộ dữ liệu,"Tổng doanh thu đạt 8.950 với lợi nhuận 1.900 và tổng số lượng tiêu thụ là 57. Biên lợi nhuận hiện đang ở mức khá tốt (khoảng 21.2%), cho thấy hoạt động kinh doanh có hiệu quả sinh lời cao. Doanh nghiệp nên duy trì các danh mục sản phẩm chủ lực này và tiếp tục đẩy mạnh sản lượng bán ra để tối ưu hóa ",30670.6,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+91,financial_sample,edge,Có outlier nào trong dữ liệu doanh thu không?,"# Executive Data Brief
+
+Phạm vi phân tích: Có outlier nào trong dữ liệu doanh thu không?
+Dataset có 700 dòng và 16 cột.
+
+## 1. Tóm tắt điều hành
+- Có 3 cột số, 12 cột phân loại và 1 cột thời gian.
+- Không phát hiện missing values ở bảng phân tích chính.
+
+## 2. KPI chính
+- `Units Sold`: tổng 1,125,80",27897.9,200,False,1.0,1.0,0.4,1.0,1.0,0.88,
+92,sales_data,edge,Tại sao doanh thu tháng 3 lại thấp?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Tại sao doanh thu tháng 3 lại thấp?
+
+### Xếp hạng / kết quả
+1. 2024-01: 80,200,000 (18.7%)
+2. 2024-02: 75,800,000 (17.7%)
+3. 2024-03: 61,350,000 (14.3%)
+4. 2024-04: 78,500,000 (18.3%)
+5. 2024-05: 41,000,000 (9.6%)
+6. 2024-06: 78,150,000 (18.2%)
+7",18850.4,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+93,general_ledger,edge,Dữ liệu có đáng tin cậy không? Data quality như thế nào?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Dữ liệu có đáng tin cậy không? Data quality như thế nào?
+
+⚠️  Dữ liệu có 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD). Tổng số được tính gộp nhiều currency — cần quy đổi để so sánh chính xác.
+
+### So sánh chỉ số
+1. AccountNumber: 9,597,140
+2. Debit: ",18518.0,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+94,expense_claims,edge,Nếu giảm claims xuống 20% thì công ty tiết kiệm được bao nhiêu?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Nếu giảm claims xuống 20% thì công ty tiết kiệm được bao nhiêu?
+
+⚠️  Dữ liệu có 5 loại tiền tệ (AUD, CAD, EUR, GBP, USD). Tổng số được tính gộp nhiều currency — cần quy đổi để so sánh chính xác.
+
+### So sánh chỉ số
+1. Amount: 398,548.3500",17562.9,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+95,viet_relational,edge,Tổng doanh thu từ tất cả các sheet là bao nhiêu?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: Tổng doanh thu từ tất cả các sheet là bao nhiêu?
+
+### So sánh chỉ số
+1. quantity: 97
+2. unit_price: 430,500,000
+3. discount_pct: 1.3000",18502.1,200,False,1.0,1.0,1.0,1.0,1.0,1.0,
+96,sales_sample,language,cho tôi biết tổng sales đi,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: cho tôi biết tổng sales đi
+
+### So sánh chỉ số
+1. sales: 8,950
+2. profit: 1,900
+3. quantity: 57",17925.8,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+97,sales_sample,language,cái nào bán chạy nhất vậy?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: cái nào bán chạy nhất vậy?
+
+### So sánh chỉ số
+1. sales: 8,950
+2. profit: 1,900
+3. quantity: 57",19313.8,200,False,1.0,0.4,1.0,1.0,0.0,0.75,
+98,sales_data,language,ai bán hàng giỏi nhất?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: ai bán hàng giỏi nhất?
+
+### So sánh chỉ số
+1. order_id: 30,465
+2. quantity: 86
+3. unit_price: 429,000,000
+4. discount_pct: 130",17942.1,200,False,1.0,0.4,1.0,1.0,0.0,0.75,
+99,sales_data,language,lãi tổng cộng được bao nhiêu rồi?,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: lãi tổng cộng được bao nhiêu rồi?
+
+### So sánh chỉ số
+1. order_id: 30,465
+2. quantity: 86
+3. unit_price: 429,000,000
+4. discount_pct: 130",17961.2,200,False,1.0,0.4,1.0,1.0,1.0,0.85,
+100,sales_data,language,báo cáo nhanh tình hình kinh doanh đi,"# Executive Data Brief
+
+## Kết quả phân tích
+Câu hỏi: báo cáo nhanh tình hình kinh doanh đi
+
+### So sánh chỉ số
+1. order_id: 30,465
+2. quantity: 86
+3. unit_price: 429,000,000
+4. discount_pct: 130",18168.8,200,False,1.0,0.4,1.0,1.0,1.0,0.85,

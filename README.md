@@ -1,5 +1,8 @@
 # Data Analysis AI Agent
 
+[![CI](https://github.com/luongducthangDS/data_analysis_ai_agent/actions/workflows/ci.yml/badge.svg)](https://github.com/luongducthangDS/data_analysis_ai_agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > Trò chuyện với file CSV/Excel bằng tiếng Việt. Một LLM agent **lập kế hoạch phân tích dưới dạng JSON đã kiểm định**, thực thi **tất định trên pandas**, rồi tổng hợp insight — **không thực thi code tùy ý, không sinh SQL tự do**.
 
 `upload → hỏi bằng ngôn ngữ tự nhiên → nhận số liệu + biểu đồ + brief điều hành`
@@ -100,10 +103,15 @@ flowchart LR
 
 ```bash
 pytest -q                    # 101 unit test (agent, planner, storage, failover, guardrails, multi-sheet)
-python tests/eval_100.py     # eval framework — cần server đang chạy
+
+# eval end-to-end — cần server đang chạy + GEMINI_API_KEY
+uvicorn backend.app.main:app --port 8000 &
+python tests/eval_100.py --base-url http://localhost:8000 --delay 2
 ```
 
-6 dataset eval nằm sẵn trong `data/samples/` (dữ liệu tổng hợp / mẫu công khai, không PII) — `eval_100.py` tự upload rồi chấm với ground truth tính bằng pandas.
+6 dataset eval nằm sẵn trong `data/samples/` (dữ liệu tổng hợp / mẫu công khai, không PII) — `eval_100.py` tự upload rồi chấm với ground truth tính bằng pandas. `--delay` giãn nhịp request để không đụng rate‑limit free tier.
+
+**Kết quả baseline** (100 câu, đã commit): xem [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
 ## Giới hạn (có chủ đích)
 
