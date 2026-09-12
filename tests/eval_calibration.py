@@ -6,15 +6,18 @@ eval_calibration.py — đối chiếu heuristic scoring (eval_100.py) với nh�
   insight · concise · vn_natural
 
 Cách dùng:
-    python tests/eval_calibration.py [--answers docs/eval-baseline/results.csv]
+    python tests/eval_calibration.py [--answers docs/eval-baseline/calibration-run-20260910.csv]
 
 In ra, cho từng chiều: n, MAE, % agreement (|Δ| ≤ 0.25), Pearson r giữa
 heuristic và nhãn tay. Đây là con số để đánh giá độ tin cậy của heuristic —
 KHÔNG dùng để chỉnh heuristic cho khớp nhãn (overfit).
 
-⚠️ 30 nhãn dưới đây do 1 người review từng câu trả lời thật của run 2026-09-10.
-   Không phải "human eval" quy mô — chỉ đủ để sanity-check heuristic. Nếu trích
-   dẫn con số r cho CV, tự review lại nhãn 1 lượt trước.
+⚠️ 30 nhãn dưới đây do 1 người review từng câu trả lời thật của run 2026-09-10, đóng băng ở
+   `docs/eval-baseline/calibration-run-20260910.csv` (KHÔNG phải baseline hiện tại — baseline
+   `results.csv` đã được ghi đè bởi run sạch hơn ngày 2026-09-12). Chỉ đủ để sanity-check
+   heuristic — không phải "human eval" quy mô. Nếu trích dẫn con số r cho CV, tự review lại
+   nhãn 1 lượt trước. Muốn calibration trên toàn bộ 100 câu + nhiều mẫu hơn: dùng `--judge`
+   trong eval_100.py (LLM-as-judge), không cần gán tay.
 """
 from __future__ import annotations
 
@@ -86,7 +89,7 @@ def heuristic_scores(tc, row) -> dict[str, float]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--answers", default="docs/eval-baseline/results.csv")
+    ap.add_argument("--answers", default="docs/eval-baseline/calibration-run-20260910.csv")
     args = ap.parse_args()
 
     E._load_ground_truths()

@@ -528,39 +528,52 @@ _REDIRECT_SIGNALS = [
 ]
 
 
+_VN_SCALE = {"nghìn": 1_000, "ngàn": 1_000, "triệu": 1_000_000, "tỷ": 1_000_000_000, "tỉ": 1_000_000_000}
+
+
+def _parse_one_number(raw: str) -> float | None:
+    raw = raw.rstrip(".,")   # bỏ dấu câu cuối câu ("...là 8.950." → "8.950")
+    if not raw or raw in ("-",):
+        return None
+    # Thử parse theo format Việt Nam: 1.234,56 → 1234.56
+    if re.match(r"^\d{1,3}(\.\d{3})+(,\d+)?$", raw) and not raw.startswith("0."):
+        try:
+            return float(raw.replace(".", "").replace(",", "."))
+        except ValueError:
+            pass
+    # Format "0,212" (leading 0, comma as decimal)
+    if re.match(r"^-?0,\d+$", raw):
+        try:
+            return float(raw.replace(",", "."))
+        except ValueError:
+            pass
+    # Standard: strip commas (thousands separator)
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _parse_vn_number(text: str) -> list[float]:
     """
     Parse số từ text có thể dùng định dạng Việt Nam (dấu phẩy = thập phân).
-    Ví dụ: "0,212" → 0.212; "1.234,56" → 1234.56; "8.950" → 8950
+    Ví dụ: "0,212" → 0.212; "1.234,56" → 1234.56; "8.950" → 8950; "28,63 triệu" → 28_630_000
     """
     results = []
-    # Pattern: số với optional dấu phẩy/chấm làm phân cách
-    for raw in re.findall(r"-?\d[\d.,]*", text):
-        raw = raw.rstrip(".,")   # bỏ dấu câu cuối câu ("...là 8.950." → "8.950")
-        if not raw or raw in ("-",):
+    for m in re.finditer(r"-?\d[\d.,]*", text):
+        raw = m.group(0)
+        # Số + đơn vị "nghìn/triệu/tỷ" ngay sau nó → nhân lên (model hay viết tắt kiểu "28,63 triệu").
+        # Trước 1 đơn vị scale, dấu phẩy luôn là thập phân kiểu VN ("28,63" = 28.63), không phải
+        # phân cách nghìn — khác với số trần không có scale (vd "1,900" thường là kiểu Anh = 1900).
+        tail = text[m.end():m.end() + 12].strip().lower()
+        scale = next((mult for word, mult in _VN_SCALE.items() if tail.startswith(word)), None)
+        if scale and re.match(r"^-?\d+,\d+$", raw.rstrip(".,")):
+            val = float(raw.rstrip(".,").replace(",", "."))
+        else:
+            val = _parse_one_number(raw)
+        if val is None:
             continue
-        # Thử parse theo format Việt Nam: 1.234,56 → 1234.56
-        if re.match(r"^\d{1,3}(\.\d{3})+(,\d+)?$", raw) and not raw.startswith("0."):
-            # European: "1.234,56" hoặc "1.234"
-            val = raw.replace(".", "").replace(",", ".")
-            try:
-                results.append(float(val))
-                continue
-            except ValueError:
-                pass
-        # Format "0,212" (leading 0, comma as decimal)
-        if re.match(r"^-?0,\d+$", raw):
-            try:
-                results.append(float(raw.replace(",", ".")))
-                continue
-            except ValueError:
-                pass
-        # Standard: strip commas (thousands separator)
-        cleaned = raw.replace(",", "")
-        try:
-            results.append(float(cleaned))
-        except ValueError:
-            pass
+        results.append(val * scale if scale else val)
     return results
 
 
