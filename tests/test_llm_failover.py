@@ -92,6 +92,8 @@ def test_model_list_defaults(monkeypatch):
 
 def test_env_chain_gemini_models_then_openrouter_models(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
+    for _v in ("GEMINI_API_KEY2", "GEMINI_API_KEY3", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(_v, raising=False)   # cô lập: env thật có thể có key phụ
     monkeypatch.setenv("GEMINI_MODELS", "g1,g2")
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     monkeypatch.setenv("OPENROUTER_MODELS", "a/m1:free,b/m2:free")
@@ -101,6 +103,8 @@ def test_env_chain_gemini_models_then_openrouter_models(monkeypatch):
 
 def test_env_chain_forced_gemini_skips_openrouter(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
+    for _v in ("GEMINI_API_KEY2", "GEMINI_API_KEY3", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(_v, raising=False)
     monkeypatch.setenv("GEMINI_MODELS", "g1,g2")
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     names = [name for name, _ in _env_provider_specs("gemini")]
@@ -112,3 +116,46 @@ def test_env_chain_forced_openrouter_skips_gemini(monkeypatch):
     monkeypatch.setenv("OPENROUTER_MODELS", "a/m1:free")
     names = [name for name, _ in _env_provider_specs("openrouter")]
     assert names == ["openrouter:a/m1:free"]
+
+
+# ── Nhiều Gemini key: nhân đôi quota free tier ──────────────────────────────
+
+def test_gemini_keys_dedupes_and_orders(monkeypatch):
+    from backend.app.services.llm_service import _gemini_keys
+    monkeypatch.setenv("GEMINI_API_KEY", "k1")
+    monkeypatch.setenv("GEMINI_API_KEY2", "k2")
+    monkeypatch.setenv("GOOGLE_API_KEY", "k1")        # trùng key1 → phải bị loại
+    assert _gemini_keys() == ["k1", "k2"]
+
+
+def test_gemini_keys_empty_when_unset(monkeypatch):
+    from backend.app.services.llm_service import _gemini_keys
+    for var in ("GEMINI_API_KEY", "GEMINI_API_KEY2", "GEMINI_API_KEY3", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    assert _gemini_keys() == []
+
+
+def test_specs_try_second_key_before_downgrading_model(monkeypatch):
+    """Quota tính theo (key, model): hết quota thì đổi key trước, hạ model sau."""
+    from backend.app.services.llm_service import _gemini_specs
+    monkeypatch.setenv("GEMINI_API_KEY", "k1")
+    monkeypatch.setenv("GEMINI_API_KEY2", "k2")
+    monkeypatch.delenv("GEMINI_API_KEY3", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_MODELS", "model-a,model-b")
+
+    names = [name for name, _ in _gemini_specs()]
+    assert names == [
+        "gemini:model-a", "gemini:model-a#key2",
+        "gemini:model-b", "gemini:model-b#key2",
+    ]
+
+
+def test_single_key_keeps_original_chain(monkeypatch):
+    """Chỉ một key thì chuỗi phải y như trước — không đổi hành vi cũ."""
+    from backend.app.services.llm_service import _gemini_specs
+    monkeypatch.setenv("GEMINI_API_KEY", "k1")
+    for var in ("GEMINI_API_KEY2", "GEMINI_API_KEY3", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GEMINI_MODELS", "model-a,model-b")
+    assert [n for n, _ in _gemini_specs()] == ["gemini:model-a", "gemini:model-b"]

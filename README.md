@@ -28,7 +28,7 @@ Backend **validate plan với schema thật của DataFrame** (tên cột, kiể
 | Chủ đề | Chi tiết |
 |---|---|
 | **Agent orchestration** | Máy trạng thái LangGraph: `classify → {bot_info \| off_topic \| data_summary \| planner → execute → synthesize}`. Streaming từng node qua SSE. |
-| **Độ tin cậy LLM** | Chuỗi failover 6 mắt xích — 3 model Gemini (`flash-lite → flash`) → 3 model OpenRouter. Lỗi runtime (429 / 404 / timeout) tự chuyển model kế; cạn chuỗi mới xuống rule‑based. |
+| **Độ tin cậy LLM** | Chuỗi failover tới 9 mắt xích — 3 model Gemini × số key khai báo → 3 model OpenRouter. Quota free tier tính theo cặp (key, model), nên hết quota thì **đổi key trên cùng model trước**, hạ model sau — giữ model tốt nhất lâu nhất. Lỗi runtime (429 / 404 / timeout) tự chuyển model kế; cạn chuỗi mới xuống rule‑based. |
 | **Safe tool‑calling** | Whitelist action & aggregation, plan validate với DataFrame, thực thi pandas tất định trong "sandbox" thao tác. |
 | **Grounding** | Câu tổng hợp bị **từ chối** nếu chứa con số không khớp kết quả tính (`_numbers_grounded`) → tránh bịa số. |
 | **Evaluation** | `tests/eval_100.py` — 100 câu / 6 dataset, ground truth tính bằng pandas. Chiều cứng `correctness` (số ±10%) + 3 chiều mềm calibrate bằng nhãn tay **và** LLM-as-judge full-100. Baseline: **84/100**, xem [`docs/EVALUATION.md`](docs/EVALUATION.md). |
@@ -72,6 +72,7 @@ Phát triển frontend: `cd frontend && npm run dev` (Vite proxy `/api` → :800
 
 ```bash
 GEMINI_API_KEY=...           # https://aistudio.google.com/apikey — bắt buộc
+GEMINI_API_KEY2=...          # tùy chọn — nhân đôi quota free tier (15 req/phút mỗi key mỗi model)
 OPENROUTER_API_KEY=...       # https://openrouter.ai/keys — tùy chọn, để có tầng dự phòng
 ```
 
@@ -105,7 +106,7 @@ flowchart LR
 ## Kiểm thử
 
 ```bash
-pytest -q                    # 151 test (agent, planner, storage, failover, guardrails, multi-sheet, adversarial, usage, routing)
+pytest -q                    # 155 test (agent, planner, storage, failover, guardrails, multi-sheet, adversarial, usage, routing)
 
 python tests/test_adversarial.py   # in bảng block rate của bộ tấn công đối kháng
 

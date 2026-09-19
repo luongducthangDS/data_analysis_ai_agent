@@ -265,12 +265,36 @@ def _make_request_key_anthropic(key: str) -> Callable[[], object]:
     return factory
 
 
+def _gemini_keys() -> list[str]:
+    """Các Gemini key khả dụng, theo thứ tự ưu tiên, đã khử trùng lặp.
+
+    Quota free tier tính riêng cho từng cặp (key, model) — 15 request/phút mỗi
+    model mỗi key. Khai thêm GEMINI_API_KEY2 là nhân đôi hạn mức đó.
+    """
+    keys: list[str] = []
+    for var in ("GEMINI_API_KEY", "GEMINI_API_KEY2", "GEMINI_API_KEY3", "GOOGLE_API_KEY"):
+        key = (os.getenv(var) or "").strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
 def _gemini_specs() -> list[_ProviderSpec]:
-    """One spec per configured Gemini model."""
-    return [
-        (f"gemini:{m}", (lambda m=m: GeminiLLMClient(m)))
-        for m in _gemini_models()
-    ]
+    """One spec per (model, key) pair.
+
+    Thứ tự: hết quota một model thì thử KEY KHÁC trên cùng model trước, rồi mới
+    hạ xuống model kế. Giữ được model tốt nhất lâu nhất thay vì tụt hạng ngay
+    khi key đầu chạm trần.
+    """
+    keys = _gemini_keys()
+    if not keys:
+        return []
+    specs: list[_ProviderSpec] = []
+    for model in _gemini_models():
+        for idx, key in enumerate(keys, start=1):
+            label = f"gemini:{model}" if idx == 1 else f"gemini:{model}#key{idx}"
+            specs.append((label, _make_request_key_gemini(key, model)))
+    return specs
 
 
 def _openrouter_specs() -> list[_ProviderSpec]:
@@ -291,7 +315,7 @@ def _env_provider_specs(forced: str) -> list[_ProviderSpec]:
 
     # auto: include only providers whose key is present, in fallback order
     specs: list[_ProviderSpec] = []
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+    if _gemini_keys():
         specs += _gemini_specs()
     if os.getenv("OPENROUTER_API_KEY"):
         specs += _openrouter_specs()
