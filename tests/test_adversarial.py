@@ -125,8 +125,14 @@ def test_ssrf_internal_targets_blocked(url):
         assert_public_url(url)
 
 
-def test_ssrf_redirect_to_internal_blocked(internal_server):
-    """Redirect là đường vòng kinh điển: URL đầu hợp lệ, hop sau trỏ nội bộ."""
+def test_ssrf_redirect_to_internal_blocked(internal_server, monkeypatch):
+    """Redirect là đường vòng kinh điển: URL đầu hợp lệ, hop sau trỏ nội bộ.
+
+    Không thể dùng một URL public thật trong test offline, nên ở đây cho chặng
+    ĐẦU đi qua rồi để các chặng sau bị kiểm như bình thường. Nếu `safe_fetch`
+    lỡ dùng allow_redirects=True, hop thứ hai sẽ không được kiểm và test hỏng.
+    """
+    from backend.app.services import security
 
     class _Redirector(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -139,14 +145,40 @@ def test_ssrf_redirect_to_internal_blocked(internal_server):
 
     srv = socketserver.TCPServer(("127.0.0.1", 0), _Redirector)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        from backend.app.services.security import safe_fetch
 
+    real_assert = security.assert_public_url
+    seen: list[str] = []
+
+    def only_first_hop_allowed(url: str) -> None:
+        seen.append(url)
+        if len(seen) == 1:      # giả lập chặng đầu là một URL public hợp lệ
+            return
+        real_assert(url)
+
+    monkeypatch.setattr(security, "assert_public_url", only_first_hop_allowed)
+    try:
         with pytest.raises(BlockedURLError):
-            safe_fetch(f"http://127.0.0.1:{srv.server_address[1]}/start")
+            security.safe_fetch(f"http://127.0.0.1:{srv.server_address[1]}/start")
+        # Chứng minh hop thứ hai THỰC SỰ được kiểm, chứ không phải chặn ở hop đầu
+        assert len(seen) == 2, f"Chỉ kiểm {len(seen)} chặng — redirect không được validate lại"
+        assert seen[1].endswith("/secret")
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_safe_fetch_does_not_auto_follow_redirects():
+    """Chốt chặn hồi quy: allow_redirects phải luôn tắt.
+
+    Bật nó lên thì requests tự đi theo Location mà không qua assert_public_url,
+    vô hiệu hoá toàn bộ lớp chống SSRF ở các chặng sau.
+    """
+    import inspect
+
+    from backend.app.services import security
+
+    src = inspect.getsource(security.safe_fetch)
+    assert "allow_redirects=False" in src
 
 
 # --------------------------------------------------------------- B. ReDoS
