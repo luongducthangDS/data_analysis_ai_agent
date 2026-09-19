@@ -145,6 +145,58 @@ hay không", nên một chuỗi failover 6 lần hỏng vẫn được tính là
 Đây đúng là lý do cần tách lỗi theo nguyên nhân (`failures_by_type`) thay vì
 một tỉ lệ gộp.
 
+## Định tuyến intent (tool-selection accuracy)
+
+`tests/test_routing.py` — offline, `classify_query` thuần rule-based nên không tốn quota.
+
+**Accuracy trần là chỉ số lừa dối ở đây.** 85/100 câu trong bộ eval là câu hỏi dữ
+liệu, nên một bộ phân loại luôn trả `data_query` đạt ngay 85% mà không phân loại
+được gì. Chỉ số chính phải là **macro-recall**.
+
+| | Trước | Sau |
+|---|---|---|
+| Bộ eval — accuracy | 92.0% | 100% |
+| Bộ eval — macro-recall | 64.0% | 100% |
+| **Held-out — macro-recall** | **33.3%** | **100%** |
+| Held-out `bot_info` | 0/8 | 8/8 |
+| Held-out `off_topic` | 0/10 | 10/10 |
+
+Con số 92% ban đầu che giấu việc `bot_info` chỉ đúng 1/5 và `off_topic` 1/5 — bộ
+phân loại gần như luôn trả `data_query`, chỉ hơn baseline ngây thơ 7 điểm.
+
+**Nguyên nhân:** khớp chuỗi con cứng. `"viết thơ"` không bắt được *"viết cho tôi
+một bài thơ"*; `"nấu ăn"` không bắt được *"cách nấu món phở"*. Bản sửa thay bằng
+**mẫu cấu trúc** (regex mô tả dạng câu: `<chủ thể là công cụ> + <động từ khả năng>`),
+kèm cơ chế **tín hiệu dữ liệu phủ quyết** off-topic — để *"Nên mua thêm sản phẩm
+nào dựa trên doanh số?"* không bị đẩy đi cùng *"Năm nay có nên mua vàng?"*.
+
+⚠️ **Giới hạn của con số held-out.** Tập này được viết trước khi sửa, nhưng trong
+lúc sửa danh sách câu sai của nó *đã* được in ra để phân tích. Held-out đúng nghĩa
+thì không được nhìn, nên 100% ở đây lạc quan hơn thực tế. Cả hai tập cũng do cùng
+một người viết. Nó đủ chứng minh bộ phân loại không còn chỉ khớp đúng 100 câu eval,
+nhưng không đủ để tuyên bố một tỉ lệ chính xác ngoài đời thật.
+
+Lỗi tốn kém nhất — câu hỏi dữ liệu bị coi là chit-chat — được chốt riêng bằng
+`test_data_questions_never_misrouted` với ngưỡng recall 100% trên cả hai tập.
+
+## Quy chi phí về từng node (cost attribution)
+
+`usage.stage()` gán mỗi lần gọi LLM cho node phát sinh ra nó, nên `by_stage` trả
+lời được "token tiêu **ở đâu**", không chỉ "tiêu bao nhiêu". Đo thật, một câu hỏi
+(`tổng doanh thu theo vùng`, 2026-09-19):
+
+| Node | Token | % | Latency |
+|---|---|---|---|
+| `plan` | 1.815 | **83%** | 1.325 ms |
+| `synthesize` | 372 | 17% | 1.262 ms |
+
+Planner chiếm 83% token vì prompt chứa nhiều ví dụ few-shot, nhưng độ trễ lại chia
+gần đôi. Nghĩa là: muốn giảm **chi phí** thì rút gọn prompt planner; muốn giảm
+**độ trễ** thì phải động tới cả hai bước.
+
+Cách này thay cho một dịch vụ tracing ngoài (LangSmith/Langfuse): không thêm phụ
+thuộc, chạy được trong test, và số liệu đi thẳng vào response API.
+
 ## Đánh giá đối kháng (security)
 
 `tests/test_adversarial.py` — 18 đòn tấn công, chạy offline (không LLM, không server,

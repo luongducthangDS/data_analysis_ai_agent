@@ -147,3 +147,51 @@ def test_concurrent_tasks_do_not_mix_usage():
     assert stats_b["llm_calls"] == 5
     assert stats_a["models_used"] == ["a"]
     assert stats_b["models_used"] == ["b"]
+
+
+# ------------------------------------------------------------------ attribution
+
+
+def test_by_stage_attributes_tokens_to_nodes():
+    with usage.capture() as calls:
+        with usage.stage("plan"):
+            with usage.track("m") as c:
+                c.prompt_tokens, c.completion_tokens = 2000, 100
+        with usage.stage("synthesize"):
+            with usage.track("m") as c:
+                c.prompt_tokens, c.completion_tokens = 300, 150
+    stages = usage.summarize(calls)["by_stage"]
+    assert stages["plan"]["tokens"] == 2100
+    assert stages["synthesize"]["tokens"] == 450
+    assert stages["plan"]["calls"] == 1
+
+
+def test_call_outside_stage_is_marked_unknown():
+    with usage.capture() as calls:
+        with usage.track("m") as c:
+            c.prompt_tokens = 10
+    assert usage.summarize(calls)["by_stage"]["?"]["tokens"] == 10
+
+
+def test_stage_nesting_restores_outer():
+    with usage.capture() as calls:
+        with usage.stage("plan"):
+            with usage.stage("inner"):
+                with usage.track("m"):
+                    pass
+            with usage.track("m"):
+                pass
+    stages = usage.summarize(calls)["by_stage"]
+    assert stages["inner"]["calls"] == 1
+    assert stages["plan"]["calls"] == 1
+
+
+def test_failed_call_counted_in_stage_but_not_tokens():
+    with usage.capture() as calls:
+        with usage.stage("plan"):
+            with pytest.raises(RuntimeError):
+                with usage.track("m") as c:
+                    c.prompt_tokens = 999
+                    raise RuntimeError("429")
+    row = usage.summarize(calls)["by_stage"]["plan"]
+    assert row["calls"] == 1 and row["failed"] == 1 and row["tokens"] == 0

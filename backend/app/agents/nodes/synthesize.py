@@ -6,6 +6,7 @@ import re
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.app.agents.state import AgentState
+from backend.app.services import usage
 
 _log = logging.getLogger(__name__)
 
@@ -94,7 +95,8 @@ def _numbers_grounded(answer: str, result_df, extra_allowed: list[float] | None 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
 def _call_llm(client, prompt: str) -> str:
-    return client.generate(prompt, max_tokens=500, temperature=0.3)
+    with usage.stage("synthesize"):
+        return client.generate(prompt, max_tokens=500, temperature=0.3)
 
 
 def synthesize_node(state: AgentState) -> AgentState:

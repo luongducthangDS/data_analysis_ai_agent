@@ -28,6 +28,9 @@ class LLMCall:
     latency_ms: float = 0.0
     failed: bool = False
     error_type: str = ""
+    # Node nào của graph đã phát sinh lần gọi này ("plan", "synthesize", …).
+    # "?" khi lời gọi nằm ngoài mọi khối stage().
+    stage: str = "?"
 
     @property
     def total_tokens(self) -> int:
@@ -39,6 +42,7 @@ class LLMCall:
 
 
 _calls: ContextVar[list[LLMCall] | None] = ContextVar("llm_calls", default=None)
+_stage: ContextVar[str] = ContextVar("llm_stage", default="?")
 
 
 # --------------------------------------------------------------------- giá
@@ -114,6 +118,26 @@ def record(call: LLMCall) -> None:
 
 
 @contextmanager
+def stage(name: str):
+    """Gán mọi lần gọi LLM bên trong khối này cho một node của graph.
+
+        with stage("plan"):
+            client.generate(...)
+
+    Nhờ đó `summarize()` trả lời được "token tiêu ở đâu" chứ không chỉ
+    "tiêu bao nhiêu" — bước đắt nhất mới là bước đáng tối ưu.
+    """
+    token = _stage.set(name)
+    try:
+        yield
+    finally:
+        try:
+            _stage.reset(token)
+        except ValueError:
+            _stage.set("?")
+
+
+@contextmanager
 def track(model: str):
     """Đo một lần gọi LLM. Trả về LLMCall để callee điền token vào.
 
@@ -121,7 +145,7 @@ def track(model: str):
             resp = ...
             call.prompt_tokens = ...
     """
-    call = LLMCall(model=model)
+    call = LLMCall(model=model, stage=_stage.get())
     start = time.perf_counter()
     try:
         yield call
@@ -158,7 +182,29 @@ def summarize(calls: list[LLMCall]) -> dict:
         "unpriced_calls": len(unpriced),
         "failures_by_type": by_error,
         "models_used": sorted({c.model for c in ok}),
+        "by_stage": _by_stage(calls),
     }
+
+
+def _by_stage(calls: list[LLMCall]) -> dict[str, dict]:
+    """Quy token / chi phí / độ trễ về từng node của graph."""
+    stages: dict[str, dict] = {}
+    for call in calls:
+        row = stages.setdefault(
+            call.stage,
+            {"calls": 0, "failed": 0, "tokens": 0, "cost_usd": 0.0, "latency_ms": 0.0},
+        )
+        row["calls"] += 1
+        row["latency_ms"] += call.latency_ms
+        if call.failed:
+            row["failed"] += 1
+        else:
+            row["tokens"] += call.total_tokens
+            row["cost_usd"] += call.cost_usd
+    for row in stages.values():
+        row["cost_usd"] = round(row["cost_usd"], 6)
+        row["latency_ms"] = round(row["latency_ms"], 1)
+    return stages
 
 
 def to_dicts(calls: list[LLMCall]) -> list[dict]:

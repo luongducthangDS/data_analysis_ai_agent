@@ -9,6 +9,8 @@ Classifies user questions into:
 """
 from __future__ import annotations
 
+import re
+
 _BOT_INFO: list[str] = [
     # greetings → respond as bot introduction
     "chào bạn", "xin chào", "chào em", "chào anh", "chào chị",
@@ -100,10 +102,80 @@ OFF_TOPIC_RESPONSE = (
 )
 
 
+# ── Mẫu cấu trúc ────────────────────────────────────────────────────────────
+#
+# Danh sách chuỗi cố định bên trên khớp quá khít: "viết thơ" không bắt được
+# "viết cho tôi một bài thơ", "nấu ăn" không bắt được "cách nấu món phở".
+# Ba nhóm regex dưới đây mô tả *dạng câu* thay vì từng câu chữ.
+
+# Câu hỏi mà chủ thể là chính công cụ: <công cụ> ... <khả năng>
+_TOOL_SUBJECT = r"(công cụ|cong cu|ứng dụng|ung dung|hệ thống|he thong|phần mềm|phan mem|chương trình|tool|app|bot|trợ lý|tro ly|bạn|ban|em)"
+_TOOL_ABILITY = (
+    r"(có thể|co the|làm được|lam duoc|hỗ trợ|ho tro|đọc được|doc duoc|xuất|xuat"
+    r"|vẽ|ve |dùng|dung |sử dụng|su dung|phát triển|phat trien|tạo ra|tao ra"
+    r"|viết ra|chạy được|chay duoc|support|can |does |do you|draw|read|export)"
+)
+
+_BOT_INFO_PATTERNS = [
+    # "công cụ này có thể …", "app này đọc được …", "bạn hỗ trợ …"
+    rf"{_TOOL_SUBJECT}\s*(này|nay|đó)?\s*[^.?!]{{0,28}}?{_TOOL_ABILITY}",
+    # "ai là người phát triển/tạo ra ứng dụng này", "who made this app"
+    rf"(ai (là người |da |đã )?(phát triển|phat trien|tạo|tao|làm|lam|viết|viet)|who (made|created|built|develops?))\s*[^.?!]{{0,20}}{_TOOL_SUBJECT}",
+    # "tôi dùng phần mềm này thế nào", "cách dùng app"
+    rf"(dùng|dung|sử dụng|su dung|use)\s*[^.?!]{{0,20}}{_TOOL_SUBJECT}",
+]
+
+# Yêu cầu sáng tác, hoặc tư vấn đời sống — không liên quan tới file dữ liệu.
+_OFF_TOPIC_PATTERNS = [
+    # "viết cho tôi một bài thơ", "sáng tác giúp tôi câu chuyện", "write me a haiku"
+    r"(viết|viet|sáng tác|sang tac|kể|ke |làm|lam|soạn|write|compose|tell)"
+    r"[^.?!]{0,24}"
+    r"(bài thơ|bai tho|thơ|tho |truyện|truyen|câu chuyện|cau chuyen|bài hát|bai hat"
+    r"|bài văn|bai van|haiku|poem|story|song|essay)",
+    # "nên mua gì", "nên đầu tư vào đâu", "nên đi đâu" — tư vấn tiêu dùng
+    r"(nên|nen) (mua|đầu tư|dau tu|đi|di |chọn|chon|học|hoc)\b",
+    # "cách làm bánh", "cách nấu phở", "chỉ tôi cách …"
+    r"(cách|cach|chỉ tôi|chi toi|dạy tôi|day toi|hướng dẫn tôi cách)\s*(làm|lam|nấu|nau|chế biến|che bien)\b",
+    # kiến thức phổ thông: "thủ đô của", "dân số", "ai là tác giả", "who won"
+    r"(thủ đô|thu do|dân số|dan so|diện tích|dien tich|ai là tác giả|ai la tac gia"
+    r"|ai là người phát minh|thuyết tương đối|thuyet tuong doi"
+    r"|who won|capital of|population of)",
+    # "tối nay ăn gì", "trưa nay ăn gì"
+    r"(ăn gì|an gi)\b",
+]
+
+# Tín hiệu cho thấy câu hỏi thật sự nhắm vào dữ liệu đang phân tích.
+# Dùng để PHỦ QUYẾT off_topic: "Năm nay có nên mua vàng?" là off-topic, nhưng
+# "Nên mua thêm sản phẩm nào dựa trên doanh số?" thì không.
+_DATA_SIGNALS = [
+    "doanh thu", "doanh so", "doanh số", "lợi nhuận", "loi nhuan", "chi phí", "chi phi",
+    "tồn kho", "ton kho", "đơn hàng", "don hang", "khách hàng", "khach hang",
+    "cột", "cot ", "dòng", "hàng nào", "bảng", "bang ", "biểu đồ", "bieu do",
+    "tổng", "tong ", "trung bình", "trung binh", "số lượng", "so luong",
+    "top ", "cao nhất", "cao nhat", "thấp nhất", "thap nhat", "theo tháng",
+    "theo quý", "theo vùng", "theo khu vực", "trong file", "trong bảng",
+    "dữ liệu", "du lieu", "dataset", "revenue", "sales", "profit", "average",
+    "total", "count", "column", "rows",
+]
+
+
+def _matches_any(patterns: list[str], text: str) -> bool:
+    return any(re.search(p, text) for p in patterns)
+
+
+def _has_data_signal(text: str) -> bool:
+    return any(sig in text for sig in _DATA_SIGNALS)
+
+
 def classify_query(question: str) -> str:
     """
     Returns 'bot_info' | 'off_topic' | 'data_summary' | 'data_query'.
-    Rule-based, O(n) keyword scan.
+    Rule-based, không gọi LLM.
+
+    Thứ tự ưu tiên có chủ đích: câu chào → hỏi về công cụ → ngoài phạm vi →
+    tóm tắt dữ liệu → mặc định là câu hỏi dữ liệu. Mặc định nghiêng về
+    `data_query` vì bỏ sót một câu hỏi dữ liệu (trả lời chit-chat thay vì
+    phân tích) tốn kém hơn nhiều so với lỡ phân tích một câu linh tinh.
     """
     norm = question.lower().strip()
     # Short greeting messages (≤4 words) — catch "chào", "hello", "hi", "hey"
@@ -112,7 +184,12 @@ def classify_query(question: str) -> str:
         return "bot_info"
     if any(p in norm for p in _BOT_INFO):
         return "bot_info"
+    if _matches_any(_BOT_INFO_PATTERNS, norm):
+        return "bot_info"
     if any(p in norm for p in _OFF_TOPIC):
+        return "off_topic"
+    # Mẫu off-topic chỉ được áp dụng khi câu không nhắc gì tới dữ liệu.
+    if _matches_any(_OFF_TOPIC_PATTERNS, norm) and not _has_data_signal(norm):
         return "off_topic"
     if any(p in norm for p in _DATA_SUMMARY):
         return "data_summary"

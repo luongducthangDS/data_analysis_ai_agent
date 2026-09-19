@@ -6,6 +6,7 @@ import time
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from backend.app.agents.state import AgentState
+from backend.app.services import usage
 from backend.app.services.llm_service import get_llm_client
 from backend.app.services.query_classifier import BOT_INFO_RESPONSE, OFF_TOPIC_RESPONSE
 from backend.app.services.storage import session_store
@@ -28,7 +29,8 @@ def _is_retryable(exc: Exception) -> bool:
     reraise=True,
 )
 def _call_llm(client, prompt: str, max_tokens: int = 350, temperature: float = 0.5) -> str:
-    return client.generate(prompt, max_tokens=max_tokens, temperature=temperature)
+    with usage.stage("respond"):
+        return client.generate(prompt, max_tokens=max_tokens, temperature=temperature)
 
 
 def _build_profile_context(profile: dict, df_len: int, df_cols: int) -> tuple[str, dict]:

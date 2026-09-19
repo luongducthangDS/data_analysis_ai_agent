@@ -9,6 +9,7 @@ import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.app.agents.state import AgentState
+from backend.app.services import usage
 
 _log = logging.getLogger(__name__)
 
@@ -51,7 +52,8 @@ def plan_node(state: AgentState) -> AgentState:
         prompt = _build_planner_prompt(
             df, question, profile, history, session.ecommerce_col_map or None, multi_sheet_catalog=catalog
         )
-        raw = _call_llm(client, prompt)
+        with usage.stage("plan"):
+            raw = _call_llm(client, prompt)
         plan = _extract_json(raw)
         plan = _remap_action_aliases(plan)
         # If the plan targets another sheet / a join, validate against THAT frame.
