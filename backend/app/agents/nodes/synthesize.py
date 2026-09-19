@@ -6,6 +6,7 @@ import re
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.app.agents.state import AgentState
+from backend.app.services.numeric_parse import parse_number
 from backend.app.services import usage
 
 _log = logging.getLogger(__name__)
@@ -32,21 +33,17 @@ def _parse_numbers(text: str) -> list[float]:
     out: list[float] = []
     # Drop percentages — they are derived, not raw result values.
     text = re.sub(r"\d[\d.,]*\s*%", " ", text)
-    for tok in re.findall(r"\d[\d.,]*\d|\d", text):
-        cleaned = tok
-        if "," in cleaned and "." in cleaned:
-            # EN style: comma=thousands, dot=decimal
-            cleaned = cleaned.replace(",", "")
-        elif re.fullmatch(r"\d{1,3}(\.\d{3})+", cleaned):
-            cleaned = cleaned.replace(".", "")          # VN thousands separator
-        elif re.fullmatch(r"\d{1,3}(,\d{3})+", cleaned):
-            cleaned = cleaned.replace(",", "")          # EN thousands separator
-        else:
-            cleaned = cleaned.replace(",", ".")          # lone comma = decimal
-        try:
-            out.append(float(cleaned))
-        except ValueError:
-            continue
+    # Lookbehind loại phần số nằm trong MÃ ĐỊNH DANH: "GL001279" từng bị đọc
+    # thành 1279, vượt ngưỡng grounding, không khớp kết quả nào → câu trả lời
+    # đúng của LLM bị từ chối và agent rơi xuống bản dự phòng.
+    for tok in re.findall(r"(?<![A-Za-zÀ-ỹ0-9_])\d[\d.,]*\d|(?<![A-Za-zÀ-ỹ0-9_])\d", text):
+        # Dùng chung bộ đọc số với phần còn lại của hệ thống. Bản cũ coi mọi
+        # token có cả "," và "." là kiểu Anh, nên "1.999,52" (kiểu Việt) thành
+        # "1.999.52" → float() lỗi → SỐ ĐÓ BỊ BỎ QUA. Hệ quả: một con số bịa
+        # viết theo định dạng Việt Nam lọt qua lớp kiểm chứng grounding.
+        value = parse_number(tok)
+        if value is not None:
+            out.append(value)
     return out
 
 

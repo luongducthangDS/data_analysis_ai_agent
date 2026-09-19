@@ -67,6 +67,13 @@ def parse_number(value: object) -> float | None:
         # " $ -  " nghĩa là 0 trong báo cáo tài chính, không phải "không đọc được".
         return 0.0
 
+    # Dạng phân cách nghìn kiểu Việt/Âu phải xét TRƯỚC float() trực tiếp:
+    # float("1.900") = 1.9, trong khi "1.900" ở đây gần như luôn là 1900.
+    # Yêu cầu đúng cụm 3 chữ số nên "1.90" (thập phân thật) không dính.
+    if re.fullmatch(r"[+-]?\d{1,3}(\.\d{3})+", text):
+        number = float(text.replace(".", ""))
+        return -number if negative else number
+
     # Số sạch (kể cả "1e3", "-17") đọc thẳng, khỏi đoán dấu phân cách.
     try:
         number = float(text)

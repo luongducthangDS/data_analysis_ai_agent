@@ -220,3 +220,44 @@ def test_amount_with_currency_suffix_still_parses():
     assert parse_number("32.000.000 VNĐ") == pytest.approx(32_000_000.0)
     assert parse_number("1500đ") == pytest.approx(1500.0)
     assert parse_number("250 USD") == pytest.approx(250.0)
+
+
+# ── grounding: mã định danh không phải số liệu ─────────────────────────────
+
+from backend.app.agents.nodes.synthesize import _numbers_grounded, _parse_numbers  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # Mã định danh KHÔNG được đọc thành số liệu
+        ("Giao dịch GL001279 có Debit 1.999,52", [1999.52]),
+        ("Mã ORD001 với tổng 8,950.20", [8950.2]),
+        ("sản phẩm P002 giá 32.000.000", [32000000.0]),
+        # Định dạng số vẫn phải đọc đúng
+        ("doanh thu 859.045.000 đồng", [859045000.0]),
+        ("số 1.900 sản phẩm", [1900.0]),
+    ],
+)
+def test_grounding_parser_ignores_identifiers(text, expected):
+    assert _parse_numbers(text) == expected
+
+
+def test_percentages_are_dropped():
+    """Phần trăm là số dẫn xuất, không phải giá trị trong bảng kết quả."""
+    assert _parse_numbers("tỷ lệ 21,23% và số 1.900") == [1900.0]
+
+
+def test_answer_citing_transaction_id_is_grounded():
+    """Hồi quy cho [60]: mã GL001279 từng bị đọc thành 1279 → grounding từ chối
+    câu trả lời đúng → agent rơi xuống bản dự phòng bị chấm điểm thấp."""
+    df = pd.DataFrame({"GLID": ["GL001279"], "Debit": [1999.52]})
+    answer = "Giao dịch GL001279 có giá trị Debit lớn nhất, đạt 1.999,52."
+    assert _numbers_grounded(answer, df) is True
+
+
+def test_hallucinated_vn_number_still_rejected():
+    """Sửa lỗi trên không được làm thủng lớp chống bịa số."""
+    df = pd.DataFrame({"GLID": ["GL001279"], "Debit": [1999.52]})
+    answer = "Giao dịch GL001279 có giá trị Debit lớn nhất, đạt 9.876.543,21."
+    assert _numbers_grounded(answer, df) is False

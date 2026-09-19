@@ -424,8 +424,12 @@ TEST_CASES: list[TestCase] = [
     # ── NGÔN NGỮ TỰ NHIÊN / CASUAL (5 câu) ───────────────────────────────────
     TestCase(96,  "sales_sample", "cho tôi biết tổng sales đi",
              "language", "number", "ss_total_sales"),
+    # "Bán chạy" mơ hồ: có thể là nhiều DOANH THU nhất (Electronics) hoặc nhiều
+    # SỐ LƯỢNG nhất (Office Supplies). Cả hai đều là câu trả lời hợp lý, nên
+    # không ép một đáp án — mục đích của câu này là kiểm tra agent có hiểu
+    # cách nói đời thường không, chứ không phải đoán đúng ý người ra đề.
     TestCase(97,  "sales_sample", "cái nào bán chạy nhất vậy?",
-             "language", "keyword", "ss_top_category"),
+             "language", "any", ""),
     TestCase(98,  "sales_data",   "ai bán hàng giỏi nhất?",
              "language", "keyword", "sd_top_rep"),
     TestCase(99,  "sales_data",   "lãi tổng cộng được bao nhiêu rồi?",
@@ -547,7 +551,10 @@ def _parse_one_number(raw: str) -> float | None:
     if not raw or raw in ("-",):
         return None
     # Thử parse theo format Việt Nam: 1.234,56 → 1234.56
-    if re.match(r"^\d{1,3}(\.\d{3})+(,\d+)?$", raw) and not raw.startswith("0."):
+    # `-?` là bắt buộc: thiếu nó thì "-763.041,46" trượt xuống nhánh chuẩn bên dưới
+    # và ra -763.04146 — sai 10.000 lần mà KHÔNG ném lỗi, nên câu trả lời đúng
+    # vẫn bị chấm 0 điểm correctness.
+    if re.match(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$", raw) and not raw.lstrip("-").startswith("0."):
         try:
             return float(raw.replace(".", "").replace(",", "."))
         except ValueError:
