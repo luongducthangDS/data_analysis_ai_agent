@@ -90,6 +90,65 @@ khi vá lỗi truncation + template-dump (commit trước). Kết luận thực 
 
 ⚠️ Bộ nhãn tay 30 câu do 1 người review — đủ sanity-check, không phải human-eval quy mô lớn.
 
+## Sửa cụm bug số liệu (2026-09-19)
+
+Cụm bug bên dưới từng được ghi là "cột có dấu cách thừa → planner không resolve".
+Đào kỹ thì **nguyên nhân thật khác hẳn**: cột tiền trong `financial_sample.csv`
+là **chuỗi**, không phải số —
+
+```
+" $ 16,185.00 "      " $ (4,533.75) "      " $ -   "
+```
+
+`pd.to_numeric` trả `NaN` cho cả ba, `sum()` trên cột toàn `NaN` trả về `0`, và
+agent tự tin báo *"Tổng lợi nhuận của toàn bộ dữ liệu là 0"*. Tên cột có khoảng
+trắng chỉ là triệu chứng đi kèm, không phải nguyên nhân.
+
+### Ground truth của chính bộ eval cũng sai
+
+Hàm `_clean` trong `eval_100.py` chỉ bỏ `$` và `,`, nên `(4,533.75)` → `(4533.75)`
+→ `NaN`. Nó **bỏ sót 63/700 dòng** cột `Profit` (58 số âm kế toán + 5 ô gạch ngang),
+lệch **777.321,25**:
+
+| | Tổng Profit |
+|---|---|
+| ground truth cũ (bỏ 63 dòng) | 17.671.023,54 |
+| **đúng** | **16.893.702,29** |
+
+Cả agent lẫn ground truth nay dùng chung `services/numeric_parse.py`. Nếu không,
+hai bên sẽ tính trên hai tập số khác nhau và eval mất ý nghĩa.
+
+### Ba bản sửa
+
+| Bản sửa | Nội dung |
+|---|---|
+| `numeric_parse.py` | Đọc `$ (4,533.75)` → −4533.75, `1.234,56` (châu Âu), `32.000.000 VNĐ`, `$ -` → 0. Trả `None` (không phải 0) cho chữ, nếu không một cột tên sản phẩm sẽ thành cột toàn 0. Ngưỡng 90% mới ép kiểu cả cột. |
+| `_repair_whole_dataset_aggregate` | "Tổng Debit của **toàn bộ** sổ cái" hay bị dịch thành `group_by=["AccountName"] + limit 1` → agent trả tổng của **một** tài khoản mà vẫn gọi là "toàn bộ". Bỏ `group_by` khi câu hỏi nhắm cả tập và không có dấu hiệu chia nhóm. |
+| `_repair_id_to_name_group` | Nhóm theo `product_id` cho ra "P002"; người đọc cần "MacBook Air M2". Đổi sang cột tên khi bảng có cả hai, trừ khi câu hỏi hỏi đúng mã. |
+
+Chuẩn hoá chạy một lần tại `SessionStore._normalize_frame()` — điểm mà cả 7 đường
+nạp dữ liệu đều đi qua.
+
+### Kết quả trên 12 câu từng fail
+
+**Đã sửa (8):** `31, 33, 34, 36, 43` (financial_sample) · `46, 47` (general_ledger) · `72`
+
+Ví dụ `[31]`: từ *"Tổng lợi nhuận là 0"* → **16.893.702,29**, khớp ground truth.
+`[46]`: từ *"397.936,33, ghi nhận dưới tài khoản COGS"* → **1.210.240,47**.
+
+**Còn lại (4), mỗi câu một loại vấn đề khác:**
+
+| # | Hiện trạng | Bản chất |
+|---|---|---|
+| `38` | agent trả "Tháng 10", GT `" October "` | **Agent đúng, chấm điểm sai** — so khớp từ khoá không hiểu October = tháng 10 |
+| `48` | net balance ra sai | Grammar plan **không có phép trừ giữa hai metric**; cần thêm derived op |
+| `60` | `concise`/`vn_natural` thấp | Rơi vào định dạng "Executive Brief" của nhánh tổng hợp dự phòng |
+| `71` | **dao động**: lúc trả 12 (đúng), lúc 32 | LLM chọn sai sheet trong file nhiều sheet — không ổn định giữa các lần chạy |
+
+Bốn câu này **không** sửa được bằng cùng một cách với cụm trên: một câu là lỗi
+của thang điểm, một câu là giới hạn của grammar, một câu là định dạng đầu ra,
+một câu là tính bất định của LLM.
+
 ## Bug agent do eval phát hiện (chưa sửa — ngoài scope harness)
 
 Ổn định qua 2 lần chạy độc lập (2026-09-10 và 2026-09-12) — không phải nhiễu ngẫu nhiên:

@@ -35,6 +35,7 @@ Backend **validate plan với schema thật của DataFrame** (tên cột, kiể
 | **Observability** | `services/usage.py` đo token / chi phí / độ trễ từng lần gọi LLM và **quy về từng node** (`plan` chiếm 83% token, `synthesize` 17%), trả kèm trong response API. Eval báo cáo p95·p99 latency, `$/1.000 câu hỏi`, lỗi provider tách theo nguyên nhân. Chi phí chưa khai giá báo `n/a` thay vì `$0`. Không cần dịch vụ tracing ngoài. |
 | **Routing eval** | `tests/test_routing.py` — đo bằng **macro-recall** chứ không phải accuracy, vì 85% câu là `data_query` nên accuracy trần che mất lỗi. Phát hiện `bot_info`/`off_topic` chỉ đúng 1/5; sửa bằng mẫu cấu trúc + tín hiệu dữ liệu phủ quyết → held-out macro-recall **33% → 100%**. |
 | **Adversarial testing** | `tests/test_adversarial.py` — 18 đòn tấn công (SSRF / plan escape / prompt injection), chạy offline trong CI, chặn 18/18. Bộ này phát hiện và vá 4 lỗ hổng thật: SSRF ở import-from-URL, ReDoS ở filter `contains`, indirect prompt injection qua dữ liệu upload, `limit` không trần — chi tiết ở [`docs/EVALUATION.md`](docs/EVALUATION.md). |
+| **Data hygiene** | `services/numeric_parse.py` đọc được cột tiền dạng chữ (`" $ (4,533.75) "` â â4533.75, định dạng châu Âu, `32.000.000 VNĐ`). Không có nó, `sum()` trên cột toàn `NaN` trả `0` và agent báo "Tổng lợi nhuận là 0". Bộ eval **cũng** dính lỗi này — ground truth cũ bỏ sót 63/700 dòng; nay cả hai dùng chung một bộ đọc số. |
 | **Fuzzy column resolution** | LLM gọi sai tên cột (thiếu dấu, viết tắt) → resolver khớp mờ về tên thật trước khi validate. |
 | **Multi‑sheet / multi‑file** | Tự phát hiện quan hệ giữa các sheet; planner sinh **cross‑sheet join**; cảnh báo fan‑out khi join 1‑nhiều làm phồng số dòng. |
 | **Full‑stack** | FastAPI + React/Vite, dashboard tự sinh KPI theo domain, export CSV/Markdown, đóng gói Docker, health check. |
@@ -106,7 +107,7 @@ flowchart LR
 ## Kiểm thử
 
 ```bash
-pytest -q                    # 155 test (agent, planner, storage, failover, guardrails, multi-sheet, adversarial, usage, routing)
+pytest -q                    # 201 test (agent, planner, storage, failover, guardrails, multi-sheet, adversarial, usage, routing)
 
 python tests/test_adversarial.py   # in bảng block rate của bộ tấn công đối kháng
 

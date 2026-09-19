@@ -28,6 +28,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path as _Path
+
+# Chạy trực tiếp `python tests/eval_100.py` thì thư mục gốc repo không nằm trong
+# sys.path, nên `import backend...` (dùng để tính ground truth) sẽ hỏng và ground
+# truth bị bỏ trống trong im lặng — câu hỏi vẫn được chấm nhưng không còn chiều
+# `correctness`.
+sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 import csv
 import json
 import re
@@ -111,11 +119,14 @@ def _load_ground_truths() -> None:
     # financial_sample (cần clean $ và dấu phẩy)
     try:
         df = pd.read_csv(FILES["financial_sample"])
+        # Dùng CHUNG bộ đọc số với agent, nếu không ground truth và agent sẽ
+        # tính trên hai tập số khác nhau. Bản cũ chỉ bỏ "$" và "," nên
+        # " $ (4,533.75) " thành NaN — bỏ sót 63/700 dòng của cột Profit
+        # (58 số âm kế toán + 5 ô gạch ngang), lệch 777.321,25.
+        from backend.app.services.numeric_parse import parse_numeric_series
+
         def _clean(s):
-            return pd.to_numeric(
-                s.astype(str).str.replace(r"[\$,]", "", regex=True).str.strip(),
-                errors="coerce",
-            )
+            return parse_numeric_series(s)
         for col in df.select_dtypes("object").columns:
             if col not in ["Segment", "Country", " Product ", " Discount Band ", " Month Name ", "Date"]:
                 df[col] = _clean(df[col])

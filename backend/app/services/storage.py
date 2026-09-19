@@ -13,6 +13,10 @@ import re
 
 import pandas as pd
 
+from backend.app.services.numeric_parse import (
+    coerce_numeric_columns,
+    strip_column_names,
+)
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer, SheetRelationship
 from backend.app.database import init_db, db_session, SessionModel
 
@@ -89,7 +93,7 @@ class SessionStore:
             suffix = file_path.suffix.lower()
             if suffix == ".csv":
                 df = pd.read_csv(file_path)
-                df = self._coerce_datetime_columns(df)
+                df = self._normalize_frame(df)
                 sheet_key = Path(filename).stem
                 if sheet_key in all_sheets:
                     suffix_index = 1
@@ -100,7 +104,7 @@ class SessionStore:
             elif suffix in {".xlsx", ".xls"}:
                 file_sheets = MultiSheetAnalyzer.read_all_sheets(str(file_path))
                 for sheet_name, df in file_sheets.items():
-                    df = self._coerce_datetime_columns(df)
+                    df = self._normalize_frame(df)
                     sheet_key = f"{Path(filename).stem}::{sheet_name}"
                     if sheet_key in all_sheets:
                         suffix_index = 1
@@ -329,11 +333,11 @@ class SessionStore:
 
                 suffix = file_path.suffix.lower()
                 if suffix == ".csv":
-                    df = self._coerce_datetime_columns(pd.read_csv(file_path))
+                    df = self._normalize_frame(pd.read_csv(file_path))
                     all_sheets[Path(file_name).stem] = df
                 elif suffix in {".xlsx", ".xls"}:
                     for sheet_name, df in MultiSheetAnalyzer.read_all_sheets(str(file_path)).items():
-                        all_sheets[f"{Path(file_name).stem}::{sheet_name}"] = self._coerce_datetime_columns(df)
+                        all_sheets[f"{Path(file_name).stem}::{sheet_name}"] = self._normalize_frame(df)
 
             if not all_sheets:
                 raise KeyError(f"No files could be loaded for session: {session_id}")
@@ -450,9 +454,9 @@ class SessionStore:
     def _read_dataframe(file_path: Path) -> pd.DataFrame:
         suffix = file_path.suffix.lower()
         if suffix == ".csv":
-            return SessionStore._coerce_datetime_columns(pd.read_csv(file_path))
+            return SessionStore._normalize_frame(pd.read_csv(file_path))
         if suffix in {".xlsx", ".xls"}:
-            return SessionStore._coerce_datetime_columns(pd.read_excel(file_path))
+            return SessionStore._normalize_frame(pd.read_excel(file_path))
         raise ValueError("Only CSV, XLSX, and XLS files are supported.")
 
     @staticmethod
@@ -474,6 +478,22 @@ class SessionStore:
             return []
 
     @staticmethod
+    @staticmethod
+    def _normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
+        """Dọn một DataFrame vừa nạp, trước khi mọi thứ khác chạm vào nó.
+
+        Thứ tự có chủ đích:
+          1. cắt khoảng trắng thừa ở tên cột (" Profit " → "Profit");
+          2. nhận diện cột ngày (dựa vào TÊN cột, nên phải sau bước 1);
+          3. đọc cột tiền tệ dạng chữ thành số (" $ (4,533.75) " → -4533.75).
+
+        Bỏ bước 3 thì `sum()` trên cột toàn NaN trả về 0 và agent báo
+        "Tổng lợi nhuận là 0" — xem docs/EVALUATION.md.
+        """
+        df = strip_column_names(df)
+        df = SessionStore._coerce_datetime_columns(df)
+        return coerce_numeric_columns(df)
+
     def _coerce_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
         date_name_pattern = re.compile(r"(date|time|ngay|thang|nam)", re.IGNORECASE)

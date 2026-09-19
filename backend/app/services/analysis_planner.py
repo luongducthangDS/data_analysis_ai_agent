@@ -13,6 +13,7 @@ import plotly.express as px
 
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.llm_service import get_llm_client
+from backend.app.services.numeric_parse import parse_numeric_series
 from backend.app.services.security import LITERAL_CONTAINS, sanitize_for_prompt
 
 _log = logging.getLogger(__name__)
@@ -632,6 +633,47 @@ def _repair_who_plan(plan: dict[str, Any], question: str, df: pd.DataFrame) -> d
     return repaired
 
 
+def _repair_id_to_name_group(plan: dict[str, Any], question: str, df: pd.DataFrame) -> dict[str, Any]:
+    """Nhóm theo cột TÊN thay vì cột MÃ khi bảng có cả hai.
+
+    Hỏi "sản phẩm nào có giá cao nhất" mà nhóm theo `product_id` thì câu trả
+    lời là "P002" — đúng số nhưng vô dụng với người đọc, họ cần "MacBook Air M2".
+
+    Chỉ đổi khi tồn tại cột tên tương ứng và câu hỏi không chủ động hỏi mã.
+    """
+    group_by = plan.get("group_by")
+    if not group_by:
+        return plan
+
+    normalized = _normalize(question)
+    if any(token in normalized for token in ("ma ", " id", "id ", "code", "ma so")):
+        return plan     # người dùng hỏi đúng cái mã
+
+    columns = {str(c).lower(): str(c) for c in df.columns}
+    repaired_group, changed = [], False
+    for column in group_by:
+        match = re.fullmatch(r"(.+?)[_ ]?id", str(column), flags=re.IGNORECASE)
+        if not match:
+            repaired_group.append(column)
+            continue
+        prefix = match.group(1).lower()
+        for candidate in (f"{prefix}_name", f"{prefix}name", f"ten_{prefix}", f"{prefix}_ten"):
+            if candidate in columns:
+                repaired_group.append(columns[candidate])
+                changed = True
+                break
+        else:
+            repaired_group.append(column)
+
+    if not changed:
+        return plan
+
+    repaired = dict(plan)
+    repaired["group_by"] = repaired_group
+    _log.info("_repair_id_to_name_group: %r → %r", group_by, repaired_group)
+    return repaired
+
+
 def _repair_column_names(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, Any]:
     """
     Fuzzy-resolve LLM-generated column names to actual DataFrame columns.
@@ -695,8 +737,50 @@ def _repair_column_names(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, An
     return repaired
 
 
-def _repair_plan_for_question(plan: dict[str, Any], question: str) -> dict[str, Any]:
+# Câu hỏi nhắm tới CẢ tập dữ liệu, không phải từng nhóm.
+_WHOLE_DATASET_MARKERS = (
+    "toan bo", "toan he thong", "tong cong", "tat ca", "ca tap",
+    "overall", "in total", "of all", "grand total", "entire", "whole",
+)
+# Dấu hiệu câu hỏi thật sự muốn chia nhóm — nếu có thì đừng đụng vào group_by.
+_GROUPING_MARKERS = (
+    "theo ", " by ", "moi ", "tung ", " nao", "group", "phan theo",
+    "xep hang", "rank", "top ",
+)
+
+
+def _repair_whole_dataset_aggregate(plan: dict[str, Any], question: str) -> dict[str, Any]:
+    """Bỏ group_by khi câu hỏi hỏi tổng của TOÀN BỘ dữ liệu.
+
+    "Tổng Debit của toàn bộ sổ cái là bao nhiêu?" hay bị planner dịch thành
+    group_by=["AccountName"] + limit 1, và agent trả về tổng của đúng MỘT tài
+    khoản trong khi vẫn gọi đó là "toàn bộ sổ cái" — sai số liệu mà nghe rất
+    thuyết phục.
+
+    Chỉ can thiệp khi câu hỏi có dấu hiệu "toàn bộ" và KHÔNG có dấu hiệu chia
+    nhóm, để không phá các câu xếp hạng ("sản phẩm nào…", "top 5…").
+    """
+    if plan.get("action") not in {"aggregate", "compare_metrics"}:
+        return plan
+    if not plan.get("group_by"):
+        return plan
+
+    normalized = _normalize(question)
+    if not any(marker in normalized for marker in _WHOLE_DATASET_MARKERS):
+        return plan
+    if any(marker in normalized for marker in _GROUPING_MARKERS):
+        return plan
+
     repaired = dict(plan)
+    _log.info("plan repair: bỏ group_by %r vì câu hỏi nhắm toàn bộ dữ liệu", plan.get("group_by"))
+    repaired.pop("group_by", None)
+    repaired.pop("sort", None)
+    repaired["limit"] = 1
+    return repaired
+
+
+def _repair_plan_for_question(plan: dict[str, Any], question: str) -> dict[str, Any]:
+    repaired = _repair_whole_dataset_aggregate(dict(plan), question)
     normalized = _normalize(question)
     quarters = _mentioned_quarters(normalized)
     year_match = re.search(r"\b(20\d{2})\b", normalized)
@@ -1234,7 +1318,10 @@ def _aggregate_series(series: pd.Series, aggregation: str) -> Any:
 
 
 def _numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(series, errors="coerce")
+    # Hiểu cả " $ (4,533.75) ". Dữ liệu nạp qua storage đã được chuẩn hoá,
+    # nhưng đường này còn phục vụ DataFrame dựng trực tiếp (test, join nhiều
+    # sheet), nên vẫn phải tự phòng.
+    return parse_numeric_series(series)
 
 
 def _clean_number(value: Any) -> Any:

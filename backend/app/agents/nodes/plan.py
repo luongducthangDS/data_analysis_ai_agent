@@ -34,6 +34,7 @@ def plan_node(state: AgentState) -> AgentState:
     from backend.app.services.analysis_planner import (
         build_fallback_plan, _build_planner_prompt, _validate_plan_against_dataframe,
         _repair_plan_for_question, _repair_who_plan, _repair_column_names,
+        _repair_id_to_name_group,
         _build_multi_sheet_catalog,
     )
 
@@ -62,6 +63,7 @@ def plan_node(state: AgentState) -> AgentState:
             validate_df, _ = build_source_frame(session, plan["source"])
         plan = _repair_column_names(plan, validate_df)
         plan = _repair_who_plan(plan, question, validate_df)
+        plan = _repair_id_to_name_group(plan, question, validate_df)
         plan = _repair_plan_for_question(plan, question)
         _validate_plan_against_dataframe(validate_df, plan)
         _log.info("plan_node: LLM plan OK action=%r source=%r", plan.get("action"), plan.get("source"))
