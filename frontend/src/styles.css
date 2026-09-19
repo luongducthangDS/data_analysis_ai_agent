@@ -84,35 +84,6 @@ body {
   letter-spacing: -.3px;
 }
 
-nav { display: flex; flex-direction: column; gap: 2px; }
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text2);
-  cursor: pointer;
-  font-size: 13px;
-  text-align: left;
-  transition: all .18s;
-  width: 100%;
-  font-weight: 500;
-}
-.nav-item:hover {
-  background: var(--glass);
-  border-color: var(--glass-border);
-  color: var(--text1);
-}
-.nav-item.active {
-  background: var(--grad-soft);
-  border-color: var(--border-glow);
-  color: #c4b5fd;
-  font-weight: 600;
-}
-
 .badge {
   margin-left: auto;
   background: var(--accent);
@@ -122,8 +93,6 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   padding: 1px 6px;
   border-radius: 10px;
 }
-
-.divider { height: 1px; background: var(--border); }
 
 /* ── Import panel (3-tab: File / Sheets / URL) ── */
 .import-panel {
@@ -262,8 +231,99 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 }
 .report-link:hover { background: var(--surface2); }
 
-/* ── Main ── */
-.main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+/* ── Main — chat column + workspace column, side by side ── */
+.main {
+  flex: 1;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) minmax(460px, 1.15fr);
+  min-width: 0;
+}
+
+/* Chat column — permanent, never a tab */
+.chat-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* Workspace column — dashboard / data / charts */
+.workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+/* overflow:hidden — the .panel inside owns the scroll, otherwise the two nest */
+.ws-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+
+/* Column header — shared by both columns */
+.col-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  height: 46px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.col-title { font-size: 13px; font-weight: 600; color: var(--text1); letter-spacing: -.1px; }
+.col-status { font-size: 11px; color: var(--accent); margin-left: auto; }
+
+/* Workspace tab bar — sits in the same 46px band as .col-head */
+.ws-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  height: 46px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.ws-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 5px 12px;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .18s;
+}
+.ws-tab:hover { background: var(--glass); border-color: var(--glass-border); color: var(--text1); }
+.ws-tab.active {
+  background: var(--grad-soft);
+  border-color: var(--border-glow);
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+/* Suggested queries — now above the chat input instead of in the sidebar */
+.chat-suggestions {
+  flex-shrink: 0;
+  padding: 10px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sugg-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.sugg-row .chip { flex-shrink: 0; }
+
+/* Narrow screens — stack the two columns vertically */
+@media (max-width: 1180px) {
+  .main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .chat-col { border-right: none; border-bottom: 1px solid var(--border); }
+}
+
 .panel { flex: 1; overflow: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 .panel-head {
   font-size: 16px;
@@ -325,8 +385,8 @@ tr:hover td { background: rgba(255,255,255,.03); }
 .tbl-foot { font-size: 12px; color: var(--text3); padding-top: 4px; }
 
 /* ── Chat ── */
-.chat-panel { padding: 0 !important; }
-.messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+/* min-height:0 — without it a flex child refuses to shrink and the column scrolls instead */
+.messages { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
 .msg.assistant { justify-content: flex-start; }

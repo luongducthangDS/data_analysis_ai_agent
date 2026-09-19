@@ -578,7 +578,8 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"dashboard" | "preview" | "chat" | "charts">("preview");
+  // Chat is a permanent column now — `tab` only drives the workspace column.
+  const [tab, setTab] = useState<"dashboard" | "preview" | "charts">("preview");
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [allCharts, setAllCharts] = useState<ChartSpec[]>([]);
   const [reportId, setReportId] = useState("");
@@ -743,7 +744,6 @@ function App() {
     setMessages((m) => [...m, { role: "user", content: q }]);
     setQuestion("");
     setBusy(true);
-    setTab("chat");
 
     // Append placeholder streaming assistant message
     const assistantIdx = await new Promise<number>((resolve) => {
@@ -858,23 +858,6 @@ function App() {
           <span>DataAgent</span>
         </div>
 
-        <nav>
-          {dashboardData && dashboardData.kpi_cards?.length > 0 && (
-            <button className={`nav-item${tab === "dashboard" ? " active" : ""}`} onClick={() => setTab("dashboard")}>
-              📊&nbsp;Dashboard
-            </button>
-          )}
-          {(["preview", "chat", "charts"] as const).map((t) => (
-            <button key={t} className={`nav-item${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
-              {t === "preview" && "📊"}{t === "chat" && "💬"}{t === "charts" && "📈"}&nbsp;
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-              {t === "charts" && allCharts.length > 0 && <span className="badge">{allCharts.length}</span>}
-            </button>
-          ))}
-        </nav>
-
-        <div className="divider" />
-
         <div className="import-panel">
           <div className="import-tabs">
             {(["file", "url"] as const).map((t) => (
@@ -936,15 +919,6 @@ function App() {
           </div>
         )}
 
-        {suggestions.length > 0 && (
-          <div className="suggestions">
-            <div className="sugg-label">Suggested queries</div>
-            {suggestions.map((s) => (
-              <button key={s} className="chip" onClick={() => send(s)}>{s}</button>
-            ))}
-          </div>
-        )}
-
         {sessionId && (
           <a className="report-link" href={`/api/session/${sessionId}/data.csv`} download>
             ⬇ Export CSV
@@ -965,185 +939,229 @@ function App() {
         </div>
       </aside>
 
-      {/* Main */}
+      {/* Main — chat column (always visible) + workspace column */}
       <main className="main">
-        {/* Dashboard tab */}
-        {tab === "dashboard" && dashboardData && (
-          <DashboardPanel
-            data={dashboardData}
-            sessionId={sessionId}
-            onAsk={(q) => { send(q); setTab("chat"); }}
-          />
-        )}
-
-        {/* Preview tab */}
-        {tab === "preview" && (
-          <div className="panel">
-            {!sessionId ? (
-              <div className="empty">
-                <div className="empty-icon">📂</div>
-                <div className="empty-title">No dataset loaded</div>
-                <div className="empty-sub">Upload a CSV or Excel file to start</div>
-              </div>
-            ) : (
-              <>
-                <div className="panel-head">Data Preview <span className="muted">— first 10 rows</span></div>
-                {sheets.length > 1 && (
-                  <div className="active-sheet-banner">
-                    📑 Đang phân tích: <b>{activeSheet === "__concat__"
-                      ? `Gộp ${sheets.length} sheet cùng cấu trúc`
-                      : (activeSheet?.split("::").pop() ?? activeSheet)}</b>
-                    <span className="muted"> · {sheets.length} sheet — chọn sheet khác ở thanh bên trái</span>
-                  </div>
-                )}
-                <div className="tbl-wrap">
-                  <table>
-                    <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-                    <tbody>
-                      {previewRows.map((row, i) => (
-                        <tr key={i}>{previewCols.map((c) => <td key={c}>{row[c] ?? ""}</td>)}</tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="tbl-foot">
-                  {profile?.rows.toLocaleString()} total rows · {profile?.columns} columns
-                </div>
-                {profile?.column_types && (
-                  <details className="col-types-detail">
-                    <summary>Column types</summary>
-                    <div className="col-types-grid">
-                      {Object.entries(profile.column_types).map(([col, dtype]) => {
-                        const missing = profile.missing_values?.[col] ?? 0;
-                        const typeClass = dtype.startsWith("int") || dtype.startsWith("float") ? "dtype-num"
-                          : dtype.startsWith("datetime") ? "dtype-date"
-                          : "dtype-cat";
-                        return (
-                          <div key={col} className="col-type-row">
-                            <span className="col-name">{col}</span>
-                            <span className={`col-dtype ${typeClass}`}>{dtype}</span>
-                            {missing > 0 && <span className="col-missing">{missing} missing</span>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </details>
-                )}
-              </>
-            )}
+        {/* ── Chat column — permanent, no longer a tab ── */}
+        <section className="chat-col">
+          <div className="col-head">
+            <span className="col-title">Trò chuyện</span>
+            {busy && <span className="col-status">Đang xử lý…</span>}
           </div>
-        )}
 
-        {/* Chat tab */}
-        {tab === "chat" && (
-          <div className="panel chat-panel">
-            <div className="messages">
-              {messages.length === 0 && (
-                <div className="empty">
-                  <div className="empty-icon">💬</div>
-                  <div className="empty-title">Ask anything about your data</div>
-                  <div className="empty-sub">e.g. "tổng amount theo category" · "top 5 employees"</div>
-                </div>
-              )}
-              {messages.map((msg, i) => (
-                <div key={i} className={`msg ${msg.role}`}>
-                  {msg.role === "user" ? (
-                    <div className="bubble">{msg.content}</div>
-                  ) : (
-                    <div className="assistant-msg">
-                      <div className="bubble">
-                        {/* Node progress (while streaming) */}
-                        {msg.nodes && msg.nodes.length > 0 && (
-                          <NodeProgress nodes={msg.nodes} />
-                        )}
-                        {/* Answer text */}
-                        {msg.content ? (
-                          <MdText text={msg.content} />
-                        ) : msg.streaming ? (
-                          <div className="typing"><span/><span/><span/></div>
-                        ) : null}
-                        {/* Streaming cursor */}
-                        {msg.streaming && msg.content && (
-                          <span className="cursor">▋</span>
-                        )}
-                        {/* Source badge — shown after streaming done */}
-                        {!msg.streaming && msg.source && (
-                          <div className="msg-meta">
-                            <SourceBadge source={msg.source} />
-                          </div>
-                        )}
-                        {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
-                        {msg.queries && msg.queries.length > 0 && (
-                          <PlanDetail queries={msg.queries} />
-                        )}
-                      </div>
-                      {msg.charts && msg.charts.length > 0 && (
-                        <div className="msg-charts">
-                          {msg.charts.map((c) => (
-                            <div key={c.chart_id} className="chart-card">
-                              <div className="chart-title">{c.title}</div>
-                              <Plot
-                                data={c.plotly_json.data as never}
-                                layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 48 } }}
-                                useResizeHandler style={{ width: "100%", height: "280px" }}
-                                config={{ displayModeBar: false }}
-                              />
-                            </div>
-                          ))}
+          <div className="messages">
+            {messages.length === 0 && (
+              <div className="empty">
+                <div className="empty-icon">💬</div>
+                <div className="empty-title">Hỏi bất kỳ điều gì về dữ liệu</div>
+                <div className="empty-sub">vd. "tổng amount theo category" · "top 5 nhân viên"</div>
+              </div>
+            )}
+            {messages.map((msg, i) => (
+              <div key={i} className={`msg ${msg.role}`}>
+                {msg.role === "user" ? (
+                  <div className="bubble">{msg.content}</div>
+                ) : (
+                  <div className="assistant-msg">
+                    <div className="bubble">
+                      {/* Node progress (while streaming) */}
+                      {msg.nodes && msg.nodes.length > 0 && (
+                        <NodeProgress nodes={msg.nodes} />
+                      )}
+                      {/* Answer text */}
+                      {msg.content ? (
+                        <MdText text={msg.content} />
+                      ) : msg.streaming ? (
+                        <div className="typing"><span/><span/><span/></div>
+                      ) : null}
+                      {/* Streaming cursor */}
+                      {msg.streaming && msg.content && (
+                        <span className="cursor">▋</span>
+                      )}
+                      {/* Source badge — shown after streaming done */}
+                      {!msg.streaming && msg.source && (
+                        <div className="msg-meta">
+                          <SourceBadge source={msg.source} />
                         </div>
                       )}
+                      {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
+                      {msg.queries && msg.queries.length > 0 && (
+                        <PlanDetail queries={msg.queries} />
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
-              <div ref={bottomRef} />
-            </div>
-            <div className="input-bar">
-              <textarea rows={2}
-                placeholder={sessionId ? "Hỏi về dataset… Enter gửi, Shift+Enter xuống dòng" : "Upload dataset trước để bắt đầu"}
-                value={question} disabled={!sessionId || busy}
-                onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
-              />
-              <div className="input-btns">
-                <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
-                  onClick={() => send(question)}>
-                  {busy ? "⏳ Đang xử lý…" : "📊 Phân tích"}
-                </button>
+                    {msg.charts && msg.charts.length > 0 && (
+                      <div className="msg-charts">
+                        {msg.charts.map((c) => (
+                          <div key={c.chart_id} className="chart-card">
+                            <div className="chart-title">{c.title}</div>
+                            <Plot
+                              data={c.plotly_json.data as never}
+                              layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 48 } }}
+                              useResizeHandler style={{ width: "100%", height: "280px" }}
+                              config={{ displayModeBar: false }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Suggested queries — moved out of the sidebar, next to where they're used */}
+          {suggestions.length > 0 && (
+            <div className="chat-suggestions">
+              <div className="sugg-label">Gợi ý</div>
+              <div className="sugg-row">
+                {suggestions.map((s) => (
+                  <button key={s} className="chip" disabled={busy} onClick={() => send(s)}>{s}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="input-bar">
+            <textarea rows={2}
+              placeholder={sessionId ? "Hỏi về dataset… Enter gửi, Shift+Enter xuống dòng" : "Upload dataset trước để bắt đầu"}
+              value={question} disabled={!sessionId || busy}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
+            />
+            <div className="input-btns">
+              <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
+                onClick={() => send(question)}>
+                {busy ? "⏳ Đang xử lý…" : "📊 Phân tích"}
+              </button>
             </div>
           </div>
-        )}
+        </section>
 
-        {/* Charts tab */}
-        {tab === "charts" && (
-          <div className="panel">
-            {allCharts.length === 0 ? (
-              <div className="empty">
-                <div className="empty-icon">📈</div>
-                <div className="empty-title">No charts yet</div>
-                <div className="empty-sub">Ask a question to generate charts</div>
-              </div>
-            ) : (
-              <>
-                <div className="panel-head">Charts</div>
-                <div className="chart-grid">
-                  {allCharts.map((c) => (
-                    <div key={c.chart_id} className="chart-card">
-                      <div className="chart-title">{c.title}</div>
-                      <Plot
-                        data={c.plotly_json.data as never}
-                        layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 64 } }}
-                        useResizeHandler style={{ width: "100%", height: "320px" }}
-                        config={{ displayModeBar: false }}
-                      />
-                    </div>
-                  ))}
+        {/* ── Workspace column — dashboard / data / charts ── */}
+        <section className="workspace">
+          <div className="ws-tabs">
+            {dashboardData && dashboardData.kpi_cards?.length > 0 && (
+              <button className={`ws-tab${tab === "dashboard" ? " active" : ""}`}
+                onClick={() => setTab("dashboard")}>📊 Dashboard</button>
+            )}
+            <button className={`ws-tab${tab === "preview" ? " active" : ""}`}
+              onClick={() => setTab("preview")}>🗂️ Dữ liệu</button>
+            <button className={`ws-tab${tab === "charts" ? " active" : ""}`}
+              onClick={() => setTab("charts")}>
+              📈 Biểu đồ
+              {allCharts.length > 0 && <span className="badge">{allCharts.length}</span>}
+            </button>
+          </div>
+
+          <div className="ws-body">
+            {/* Dashboard */}
+            {tab === "dashboard" && (
+              dashboardData ? (
+                <DashboardPanel
+                  data={dashboardData}
+                  sessionId={sessionId}
+                  onAsk={(q) => send(q)}
+                />
+              ) : (
+                <div className="panel">
+                  <div className="empty">
+                    <div className="empty-icon">📊</div>
+                    <div className="empty-sub">Chưa có dashboard cho dữ liệu hiện tại</div>
+                  </div>
                 </div>
-              </>
+              )
+            )}
+
+            {/* Data preview */}
+            {tab === "preview" && (
+              <div className="panel">
+                {!sessionId ? (
+                  <div className="empty">
+                    <div className="empty-icon">📂</div>
+                    <div className="empty-title">Chưa có dữ liệu</div>
+                    <div className="empty-sub">Tải lên CSV hoặc Excel ở thanh bên trái để bắt đầu</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="panel-head">Xem trước <span className="muted">— 10 dòng đầu</span></div>
+                    {sheets.length > 1 && (
+                      <div className="active-sheet-banner">
+                        📑 Đang phân tích: <b>{activeSheet === "__concat__"
+                          ? `Gộp ${sheets.length} sheet cùng cấu trúc`
+                          : (activeSheet?.split("::").pop() ?? activeSheet)}</b>
+                        <span className="muted"> · {sheets.length} sheet — chọn sheet khác ở thanh bên trái</span>
+                      </div>
+                    )}
+                    <div className="tbl-wrap">
+                      <table>
+                        <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                        <tbody>
+                          {previewRows.map((row, i) => (
+                            <tr key={i}>{previewCols.map((c) => <td key={c}>{row[c] ?? ""}</td>)}</tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="tbl-foot">
+                      {profile?.rows.toLocaleString()} dòng · {profile?.columns} cột
+                    </div>
+                    {profile?.column_types && (
+                      <details className="col-types-detail">
+                        <summary>Kiểu dữ liệu từng cột</summary>
+                        <div className="col-types-grid">
+                          {Object.entries(profile.column_types).map(([col, dtype]) => {
+                            const missing = profile.missing_values?.[col] ?? 0;
+                            const typeClass = dtype.startsWith("int") || dtype.startsWith("float") ? "dtype-num"
+                              : dtype.startsWith("datetime") ? "dtype-date"
+                              : "dtype-cat";
+                            return (
+                              <div key={col} className="col-type-row">
+                                <span className="col-name">{col}</span>
+                                <span className={`col-dtype ${typeClass}`}>{dtype}</span>
+                                {missing > 0 && <span className="col-missing">{missing} thiếu</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Charts */}
+            {tab === "charts" && (
+              <div className="panel">
+                {allCharts.length === 0 ? (
+                  <div className="empty">
+                    <div className="empty-icon">📈</div>
+                    <div className="empty-title">Chưa có biểu đồ</div>
+                    <div className="empty-sub">Đặt câu hỏi để agent sinh biểu đồ</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="panel-head">Biểu đồ</div>
+                    <div className="chart-grid">
+                      {allCharts.map((c) => (
+                        <div key={c.chart_id} className="chart-card">
+                          <div className="chart-title">{c.title}</div>
+                          <Plot
+                            data={c.plotly_json.data as never}
+                            layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 64 } }}
+                            useResizeHandler style={{ width: "100%", height: "320px" }}
+                            config={{ displayModeBar: false }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
           </div>
-        )}
+        </section>
       </main>
     </div>
   );
