@@ -110,6 +110,60 @@ khi vá lỗi truncation + template-dump (commit trước). Kết luận thực 
   4/5 (run này) — do `temperature=0.3` ở bước synthesize. Baseline 1 lần chạy không đại diện
   tuyệt đối; số ổn định qua nhiều lần chạy là cụm bug ở financial_sample/general_ledger.
 
+## Lần chạy 2026-09-19 (chuỗi 2 key, có đầy đủ chỉ số mới)
+
+`docs/eval-baseline/summary-20260919.json` — baseline cũ (`summary.json`, 2026-09-12)
+được giữ nguyên để so.
+
+| | 2026-09-12 | 2026-09-19 | |
+|---|---|---|---|
+| pass | 84/100 | **86/100** | ▲ +2 |
+| avg_overall | 0.870 | 0.895 | ▲ +0.025 |
+| avg_correctness | 0.770 | 0.789 | ▲ +0.019 |
+| avg_insight | 0.816 | 0.856 | ▲ +0.040 |
+| median latency | 4.838 ms | **2.508 ms** | ▼ −48% |
+| p95 / p99 latency | — | 3.205 / 4.061 ms | mới |
+| tokens | — | 256.623 (2.566/câu) | mới |
+| LLM calls | — | 187 (1,87/câu) | mới |
+| provider errors | — | 4 × `ResourceExhausted` (đã failover) | mới |
+| fallback về rule-based | — | 0/100 | mới |
+
+**Đã fix:** `[9, 44, 81, 88]` · **Fail mới:** `[72, 77]`
+
+### ⚠️ Không quy toàn bộ cải thiện cho một nguyên nhân
+
+Giữa hai lần chạy có **nhiều biến cùng thay đổi**, nên +2 điểm pass không phải
+bằng chứng sạch cho bất kỳ thay đổi riêng lẻ nào:
+
+- định tuyến intent được viết lại (ảnh hưởng trực tiếp `[81]`, `[77]`);
+- `sanitize_for_prompt` chèn vào schema line → **prompt planner đã khác đi**;
+- chuỗi model thêm key phụ, và lần 09-12 chạy khi quota sạch còn lần này gặp 4 lần 429;
+- `temperature=0.3` ở bước synthesize vẫn gây biến động giữa các lần chạy — như
+  chính tài liệu này đã ghi nhận ở phần "Ghi chú độ tin cậy".
+
+Riêng độ trễ giảm 48% gần như chắc chắn **không** đến từ code trong repo: không
+có thay đổi nào rút ngắn đường xử lý. Nhiều khả năng do model/hạ tầng phía Gemini.
+
+### Hai fail mới nói lên điều gì
+
+**`[77]` "Hệ thống này có thể phân tích file Excel không?" → 0.681** (ngưỡng 0.7).
+Định tuyến giờ **đúng** (`bot_info` thay vì `data_query`) và nội dung trả lời cũng
+đúng, nhưng `concise` chỉ 0.7 vì câu trả lời vòng vo — mở đầu bằng mô tả file đã
+upload rồi mới vào ý chính. Tức là sửa định tuyến đã **làm lộ ra** chất lượng
+diễn đạt của `bot_info_node`, chứ không phải gây ra lỗi mới.
+
+**`[72]` "Sản phẩm nào có giá bán cao nhất?" → correctness 0.0.** Lỗi số liệu
+thuần, không liên quan định tuyến.
+
+Đổi lại, `[81]` "Thủ đô của nước Pháp là đâu?" từ fail lên **1.00** nhờ định tuyến
+`off_topic` hoạt động đúng.
+
+### Cụm bug cũ vẫn còn nguyên
+
+`financial_sample` (`31, 33, 34, 36, 38, 43`) và `general_ledger` (`46, 47, 48, 60`)
+tiếp tục fail đúng như mô tả ở mục "Bug agent do eval phát hiện" — cột có dấu cách
+thừa và sổ cái đa tiền tệ. Chưa đụng tới, vẫn nằm ngoài phạm vi harness.
+
 ## Đo lường vận hành (token · chi phí · đuôi độ trễ)
 
 `backend/app/services/usage.py` đo từng lần gọi LLM và trả kèm trong response

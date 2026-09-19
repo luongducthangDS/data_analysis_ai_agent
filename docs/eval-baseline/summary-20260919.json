@@ -1,0 +1,119 @@
+{
+  "timestamp": "2026-09-19T11:40:56",
+  "total": 100,
+  "passed": 86,
+  "avg_overall": 0.895,
+  "avg_correctness": 0.789,
+  "n_correctness_checked": 53,
+  "avg_no_meta": 0.98,
+  "avg_insight": 0.856,
+  "avg_concise": 0.916,
+  "avg_vn_natural": 0.973,
+  "median_latency_ms": 2508,
+  "mean_latency_ms": 2452,
+  "p95_latency_ms": 3205,
+  "p99_latency_ms": 4061,
+  "max_latency_ms": 4506,
+  "llm_calls": 187,
+  "prompt_tokens": 241494,
+  "completion_tokens": 15129,
+  "total_tokens": 256623,
+  "cost_usd": 0.0,
+  "unpriced_calls": 183,
+  "provider_errors": 4,
+  "llm_usage_rate": 100.0,
+  "http_errors": 0,
+  "weights": {
+    "hard": {
+      "no_meta": 0.16,
+      "insight": 0.22,
+      "concise": 0.1,
+      "vn_natural": 0.12,
+      "correctness": 0.4
+    },
+    "soft": {
+      "no_meta": 0.28,
+      "insight": 0.42,
+      "concise": 0.13,
+      "vn_natural": 0.17
+    }
+  },
+  "by_category": {
+    "aggregation": {
+      "avg": 0.871,
+      "passed": 32,
+      "total": 39
+    },
+    "bot_info": {
+      "avg": 0.905,
+      "passed": 4,
+      "total": 5
+    },
+    "comparison": {
+      "avg": 0.99,
+      "passed": 4,
+      "total": 4
+    },
+    "edge": {
+      "avg": 0.964,
+      "passed": 12,
+      "total": 12
+    },
+    "language": {
+      "avg": 0.92,
+      "passed": 4,
+      "total": 5
+    },
+    "off_topic": {
+      "avg": 1.0,
+      "passed": 5,
+      "total": 5
+    },
+    "ranking": {
+      "avg": 0.857,
+      "passed": 21,
+      "total": 26
+    },
+    "trend": {
+      "avg": 0.906,
+      "passed": 4,
+      "total": 4
+    }
+  },
+  "failed_ids": [
+    31,
+    33,
+    34,
+    36,
+    38,
+    43,
+    46,
+    47,
+    48,
+    60,
+    71,
+    72,
+    77,
+    97
+  ],
+  "judge_vs_heuristic": {
+    "insight": {
+      "n": 100,
+      "mae": 0.142,
+      "agreement_0.25": 0.66,
+      "pearson_r": 0.333
+    },
+    "concise": {
+      "n": 100,
+      "mae": 0.074,
+      "agreement_0.25": 0.92,
+      "pearson_r": 0.888
+    },
+    "vn_natural": {
+      "n": 100,
+      "mae": 0.033,
+      "agreement_0.25": 0.95,
+      "pearson_r": 0.821
+    }
+  }
+}
