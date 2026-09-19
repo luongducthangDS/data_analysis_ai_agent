@@ -13,6 +13,7 @@ import plotly.express as px
 
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.llm_service import get_llm_client
+from backend.app.services.security import LITERAL_CONTAINS, sanitize_for_prompt
 
 _log = logging.getLogger(__name__)
 
@@ -36,6 +37,9 @@ ALLOWED_DERIVED_OPS = {
     "date",
 }
 ALLOWED_FILTER_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "contains"}
+# Trần số dòng trả về. Kết quả còn phải đi qua LLM synthesis nên limit khổng lồ
+# vừa phình payload vừa phình token — chặn ngay ở tầng validate.
+MAX_PLAN_LIMIT = 10_000
 
 
 def run_planned_analysis(
@@ -521,8 +525,10 @@ def _build_planner_prompt(
 ) -> str:
     schema_lines = []
     for col, dtype in profile["column_types"].items():
-        examples = df[col].dropna().astype(str).head(5).tolist()
-        schema_lines.append(f"- {col} ({dtype}): {examples}")
+        # Tên cột và giá trị mẫu đến từ file người dùng upload — dữ liệu không
+        # tin cậy đi thẳng vào prompt là vector indirect prompt injection.
+        examples = [sanitize_for_prompt(v) for v in df[col].dropna().astype(str).head(5)]
+        schema_lines.append(f"- {sanitize_for_prompt(col)} ({dtype}): {examples}")
 
     # Detect currency columns for multi-currency warning in prompt
     currency_cols = [c for c in df.columns if _normalize(c) in ("currency", "tien_te", "don_vi_tien")]
@@ -727,8 +733,11 @@ def _validate_plan_shape(plan: dict[str, Any]) -> None:
     action = plan.get("action")
     if action not in ALLOWED_ACTIONS:
         raise ValueError(f"Unsupported or missing action: {action}")
-    if int(plan.get("limit", 100) or 100) < 1:
+    limit = int(plan.get("limit", 100) or 100)
+    if limit < 1:
         raise ValueError("limit must be positive.")
+    if limit > MAX_PLAN_LIMIT:
+        raise ValueError(f"limit vượt trần cho phép ({MAX_PLAN_LIMIT}).")
 
 
 def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> None:
@@ -830,7 +839,12 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
         elif op == "in":
             mask = series_cmp.isin(value_cmp if isinstance(value_cmp, list) else [value_cmp])
         elif op == "contains":
-            mask = series_cmp.astype(str).str.contains(str(value_cmp), case=False, na=False)
+            # regex=False: `contains` ở đây luôn có nghĩa "chứa chuỗi con".
+            # Để mặc định (regex=True) thì một giá trị filter như "(a+)+$"
+            # gây catastrophic backtracking — xem services/security.py.
+            mask = series_cmp.astype(str).str.contains(
+                str(value_cmp), case=False, na=False, regex=LITERAL_CONTAINS
+            )
         else:
             raise ValueError(f"Unsupported filter operator: {op}")
         work = work.loc[mask].copy()

@@ -791,6 +791,18 @@ class EvalResult:
     judge_concise: float | None = None
     judge_vn: float | None = None
     error: str = ""
+    # Đo lường vận hành, lấy từ field `usage` server trả về
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    llm_calls: int = 0
+    llm_calls_failed: int = 0
+    unpriced_calls: int = 0
+    failures_by_type: dict = field(default_factory=dict)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
     def __post_init__(self):
         self.overall = round(compute_overall(
@@ -882,6 +894,7 @@ def run_eval(
         body     = resp["body"]
         answer   = body.get("answer", "") if http_ok else ""
         llm_fail = bool(body.get("llm_synthesis_failed", False))
+        u = body.get("usage") or {}
 
         s = _score_all(tc, answer, http_ok, llm_fail)
         judge = judge_scores(judge_client, tc, answer) if (judge_client and answer) else {}
@@ -898,6 +911,13 @@ def run_eval(
             judge_concise=judge.get("concise"),
             judge_vn=judge.get("vn_natural"),
             error="",
+            prompt_tokens=int(u.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(u.get("completion_tokens", 0) or 0),
+            cost_usd=float(u.get("cost_usd", 0.0) or 0.0),
+            llm_calls=int(u.get("llm_calls", 0) or 0),
+            llm_calls_failed=int(u.get("llm_calls_failed", 0) or 0),
+            unpriced_calls=int(u.get("unpriced_calls", 0) or 0),
+            failures_by_type=u.get("failures_by_type") or {},
         )
         results.append(r)
 
@@ -1143,6 +1163,56 @@ def _median(xs: list[float]) -> float:
     return xs[len(xs) // 2] if xs else 0.0
 
 
+def _percentile(xs: list[float], q: float) -> float:
+    """Phân vị theo nội suy tuyến tính (khớp numpy.percentile mặc định).
+
+    p95 mới là con số production — mean che mất phần đuôi phân phối,
+    vốn là chỗ người dùng thực sự cảm thấy chậm.
+    """
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return 0.0
+    if len(xs) == 1:
+        return float(xs[0])
+    pos = (len(xs) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(xs) - 1)
+    frac = pos - lo
+    return float(xs[lo] * (1 - frac) + xs[hi] * frac)
+
+
+def _print_cost(results: list[EvalResult]) -> None:
+    """Token, chi phí và cấu trúc lỗi provider — lấy từ field `usage` của API."""
+    total = len(results) or 1
+    tok_in = sum(r.prompt_tokens for r in results)
+    tok_out = sum(r.completion_tokens for r in results)
+    cost = sum(r.cost_usd for r in results)
+    calls = sum(r.llm_calls for r in results)
+    unpriced = sum(r.unpriced_calls for r in results)
+
+    if not calls:
+        print("  Token/cost      : không có dữ liệu usage "
+              "(server cũ hơn bản có services/usage.py?)")
+        return
+
+    print(f"  LLM calls       : {calls} ({calls/total:.2f} lần gọi / câu hỏi)")
+    print(f"  Tokens          : in {tok_in:,} · out {tok_out:,} · tổng {tok_in + tok_out:,} "
+          f"({(tok_in + tok_out)/total:,.0f}/câu)")
+    if unpriced:
+        print(f"  Chi phí         : n/a — {unpriced} lần gọi dùng model chưa khai giá. "
+              f"Đặt LLM_PRICING_JSON để có số thật.")
+    else:
+        print(f"  Chi phí         : ${cost:.4f} tổng · ${cost/total*1000:.2f} / 1.000 câu hỏi")
+
+    errs: dict[str, int] = {}
+    for r in results:
+        for name, n in (r.failures_by_type or {}).items():
+            errs[name] = errs.get(name, 0) + n
+    if errs:
+        detail = " · ".join(f"{k}×{v}" for k, v in sorted(errs.items(), key=lambda kv: -kv[1]))
+        print(f"  Provider errors : {sum(errs.values())} lần (đã failover) — {detail}")
+
+
 def print_summary(results: list[EvalResult]) -> None:
     from collections import defaultdict
     total  = len(results)
@@ -1156,7 +1226,10 @@ def print_summary(results: list[EvalResult]) -> None:
     print(f"  Avg concise     : {_mean([r.concise for r in results]):.3f}")
     print(f"  Avg vn_natural  : {_mean([r.vn_natural for r in results]):.3f}")
     print(f"  Avg overall     : {_mean([r.overall for r in results]):.3f}")
-    print(f"  Latency         : median {_median([r.latency_ms for r in results]):.0f}ms · mean {_mean([r.latency_ms for r in results]):.0f}ms")
+    lat = [r.latency_ms for r in results]
+    print(f"  Latency         : median {_median(lat):.0f}ms · mean {_mean(lat):.0f}ms "
+          f"· p95 {_percentile(lat, 0.95):.0f}ms · p99 {_percentile(lat, 0.99):.0f}ms · max {max(lat, default=0):.0f}ms")
+    _print_cost(results)
     llm_fail_count = sum(r.llm_failed for r in results)
     llm_usage_pct = round((total - llm_fail_count) / total * 100, 1)
     print(f"  LLM usage rate  : {llm_usage_pct}%  ({llm_fail_count}/{total} fallback to rule-based)")
@@ -1198,6 +1271,16 @@ def build_summary(results: list[EvalResult]) -> dict[str, Any]:
         "avg_vn_natural": round(_mean([r.vn_natural for r in results]), 3),
         "median_latency_ms": round(_median([r.latency_ms for r in results])),
         "mean_latency_ms": round(_mean([r.latency_ms for r in results])),
+        "p95_latency_ms": round(_percentile([r.latency_ms for r in results], 0.95)),
+        "p99_latency_ms": round(_percentile([r.latency_ms for r in results], 0.99)),
+        "max_latency_ms": round(max([r.latency_ms for r in results], default=0)),
+        "llm_calls": sum(r.llm_calls for r in results),
+        "prompt_tokens": sum(r.prompt_tokens for r in results),
+        "completion_tokens": sum(r.completion_tokens for r in results),
+        "total_tokens": sum(r.total_tokens for r in results),
+        "cost_usd": round(sum(r.cost_usd for r in results), 6),
+        "unpriced_calls": sum(r.unpriced_calls for r in results),
+        "provider_errors": sum(r.llm_calls_failed for r in results),
         "llm_usage_rate": round((total - sum(r.llm_failed for r in results)) / total * 100, 1),
         "http_errors": sum(1 for r in results if r.http_status not in (200, 0)),
         "weights": {"hard": _W_HARD, "soft": _W_SOFT},
@@ -1281,6 +1364,8 @@ def print_regression(baseline_path: Path, results: list[EvalResult]) -> None:
     _d("avg_insight", "avg_insight")
     _d("avg_no_meta", "avg_no_meta")
     _d("median_latency", "median_latency_ms")
+    _d("p95_latency", "p95_latency_ms")
+    _d("total_tokens", "total_tokens")
     regressed = set(base.get("failed_ids", [])) ^ set(cur.get("failed_ids", []))
     if regressed:
         newly = sorted(set(cur.get("failed_ids", [])) - set(base.get("failed_ids", [])))

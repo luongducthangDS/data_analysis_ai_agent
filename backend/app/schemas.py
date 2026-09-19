@@ -77,6 +77,9 @@ class ChatResponse(BaseModel):
     executed_queries: list[str] = Field(default_factory=list)
     query_type: str = "data_query"  # "data_query" | "bot_info" | "off_topic"
     source: str = "llm"  # "llm" | "fallback" | "bot_info" | "off_topic"
+    # Token / chi phí / số lần gọi LLM cho lượt hỏi này. Rỗng khi không gọi LLM
+    # (bot_info, off_topic, hoặc toàn bộ rơi xuống rule-based).
+    usage: dict = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):

@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 
 from backend.app.agents.graph import agent_graph
 from backend.app.agents.state import AgentState
+from backend.app.services import usage
 
 _log = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ class AgentOutput:
     llm_synthesis_failed: bool = False
     steps: list[dict[str, Any]] = field(default_factory=list)
     source: str = "llm"  # "llm" | "fallback" | "bot_info" | "off_topic"
+    # Token / chi phí / số lần gọi LLM của riêng lượt hỏi này — xem services/usage.py
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 def run(
@@ -56,7 +59,9 @@ def run(
     }
 
     _log.info("agent.run: session=%s question=%r", session_id, question[:60])
-    final_state: AgentState = agent_graph.invoke(initial_state)
+    with usage.capture() as llm_calls:
+        final_state: AgentState = agent_graph.invoke(initial_state)
+    call_stats = usage.summarize(llm_calls)
 
     if final_state.get("llm_plan_failed"):
         _log.warning("agent.run: LLM planning fell back to rule-based for question=%r", question[:60])
@@ -72,6 +77,7 @@ def run(
         llm_synthesis_failed=final_state.get("llm_synthesis_failed", False),
         steps=final_state.get("steps") or [],
         source=_compute_source(final_state),
+        usage=call_stats,
     )
 
 
@@ -105,10 +111,12 @@ async def stream_answer(
     final_state: AgentState = initial_state
 
     # Stream node completion events as graph runs
-    async for event in agent_graph.astream(initial_state):
-        for node_name, node_state in event.items():
-            final_state = {**final_state, **node_state}
-            yield {"type": "node", "node": node_name}
+    with usage.capture() as llm_calls:
+        async for event in agent_graph.astream(initial_state):
+            for node_name, node_state in event.items():
+                final_state = {**final_state, **node_state}
+                yield {"type": "node", "node": node_name}
+    call_stats = usage.summarize(llm_calls)
 
     answer = final_state.get("answer") or ""
     source = _compute_source(final_state)
@@ -131,4 +139,5 @@ async def stream_answer(
         "source": source,
         "llm_plan_failed": final_state.get("llm_plan_failed", False),
         "llm_synthesis_failed": final_state.get("llm_synthesis_failed", False),
+        "usage": call_stats,
     }

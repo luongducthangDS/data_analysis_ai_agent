@@ -8,7 +8,15 @@ from typing import Callable, TypedDict
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+from backend.app.services import usage
+
+# override=True: file .env thắng biến môi trường sẵn có của máy.
+# Mặc định của python-dotenv thì ngược lại, và một GEMINI_API_KEY cũ còn sót
+# trong biến môi trường Windows sẽ âm thầm che key mới trong .env — triệu chứng
+# là 401 Unauthenticated dù .env đã đúng.
+# An toàn cho production: .env nằm trong .gitignore lẫn .dockerignore nên không
+# tồn tại trên Railway/Render, ở đó biến của platform vẫn được dùng như cũ.
+load_dotenv(override=True)
 
 _log = logging.getLogger(__name__)
 
@@ -73,8 +81,13 @@ class GeminiLLMClient:
                 top_p=top_p,
             ),
         )
-        resp = model.generate_content(prompt)
-        return (resp.text or "").strip()
+        with usage.track(self.model_name) as call:
+            resp = model.generate_content(prompt)
+            meta = getattr(resp, "usage_metadata", None)
+            if meta is not None:
+                call.prompt_tokens = getattr(meta, "prompt_token_count", 0) or 0
+                call.completion_tokens = getattr(meta, "candidates_token_count", 0) or 0
+            return (resp.text or "").strip()
 
     def generate_insights(self, context: str, max_tokens: int = 700, temperature: float = 0.35) -> str:
         system = """Bạn là trợ lý phân tích dữ liệu cho CEO.
@@ -137,19 +150,23 @@ class OpenRouterLLMClient:
             "temperature": temperature,
             "top_p": top_p,
         }
-        resp = requests.post(
-            f"{self.BASE_URL}/chat/completions",
-            headers=self.headers,
-            json=payload,
-            timeout=60,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        # OpenRouter returns 200 with an `error` object for upstream failures.
-        if body.get("error"):
-            raise RuntimeError(f"OpenRouter {self.model_id}: {body['error'].get('message', body['error'])}")
-        content = body["choices"][0]["message"]["content"]
-        return (content or "").strip()
+        with usage.track(self.model_id) as call:
+            resp = requests.post(
+                f"{self.BASE_URL}/chat/completions",
+                headers=self.headers,
+                json=payload,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            stats = body.get("usage") or {}
+            call.prompt_tokens = int(stats.get("prompt_tokens", 0) or 0)
+            call.completion_tokens = int(stats.get("completion_tokens", 0) or 0)
+            # OpenRouter returns 200 with an `error` object for upstream failures.
+            if body.get("error"):
+                raise RuntimeError(f"OpenRouter {self.model_id}: {body['error'].get('message', body['error'])}")
+            content = body["choices"][0]["message"]["content"]
+            return (content or "").strip()
 
     def generate_insights(self, context: str, max_tokens: int = 700, temperature: float = 0.35) -> str:
         system = """Bạn là trợ lý phân tích dữ liệu cho CEO.

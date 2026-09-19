@@ -110,9 +110,82 @@ khi vá lỗi truncation + template-dump (commit trước). Kết luận thực 
   4/5 (run này) — do `temperature=0.3` ở bước synthesize. Baseline 1 lần chạy không đại diện
   tuyệt đối; số ổn định qua nhiều lần chạy là cụm bug ở financial_sample/general_ledger.
 
+## Đo lường vận hành (token · chi phí · đuôi độ trễ)
+
+`backend/app/services/usage.py` đo từng lần gọi LLM và trả kèm trong response
+API (`ChatResponse.usage`), nên `eval_100.py` gom được số mà không cần đoán.
+
+Bổ sung vào summary: `p95_latency_ms`, `p99_latency_ms`, `max_latency_ms`,
+`llm_calls`, `prompt_tokens`, `completion_tokens`, `cost_usd`, `provider_errors`.
+
+**Vì sao thêm p95:** baseline trước đó chỉ có median 4.838ms và mean 6.074ms.
+Mean cao hơn median cho biết phân phối lệch phải, nhưng không nói được đuôi dài
+tới đâu — mà đuôi mới là cái người dùng thật sự cảm thấy.
+
+**Chi phí là số suy ra, không phải số đo.** Token do provider trả về nên đo được;
+chi phí phải quy từ bảng giá khai trong `LLM_PRICING_JSON`. Khi model chưa khai
+giá, summary in `n/a` kèm số `unpriced_calls` thay vì im lặng báo `$0` — một
+báo cáo chi phí $0 vì thiếu cấu hình còn tệ hơn không có báo cáo.
+
+### Cái mà đo lường này phát hiện ra ngay lần chạy đầu
+
+Một câu hỏi thật (`tổng doanh thu theo vùng`, 2026-09-19):
+
+```json
+{"llm_calls": 8, "llm_calls_failed": 6, "total_tokens": 2868,
+ "failures_by_type": {"Unauthenticated": 6},
+ "models_used": ["nvidia/nemotron-3-super-120b-a12b:free"]}
+```
+
+6/8 lần gọi hỏng vì `Unauthenticated` — toàn bộ nhánh Gemini chết, câu trả lời
+đúng là nhờ failover tụt xuống OpenRouter. Chỉ số `llm_usage_rate: 100%` của
+baseline cũ **không hề thấy chuyện này**: nó chỉ đếm "có rơi xuống rule-based
+hay không", nên một chuỗi failover 6 lần hỏng vẫn được tính là 100% khỏe mạnh.
+
+Đây đúng là lý do cần tách lỗi theo nguyên nhân (`failures_by_type`) thay vì
+một tỉ lệ gộp.
+
+## Đánh giá đối kháng (security)
+
+`tests/test_adversarial.py` — 18 đòn tấn công, chạy offline (không LLM, không server,
+không chạm internet; SSRF kiểm bằng HTTP server dựng tạm trên loopback).
+
+| Nhóm tấn công | Chặn | Tổng | Tỷ lệ |
+|---|---|---|---|
+| SSRF | 7 | 7 | 100% |
+| Plan escape | 6 | 6 | 100% |
+| Prompt injection | 5 | 5 | 100% |
+| **Tổng** | **18** | **18** | **100%** |
+
+⚠️ 100% ở đây nghĩa là **mọi vector đã biết trong bộ này đều bị chặn** — bộ tấn công do
+chính tác giả thiết kế, nên con số này không đồng nghĩa "hệ thống an toàn". Nó đo được
+việc các lỗ hổng đã phát hiện không tái phát.
+
+### Lỗ hổng phát hiện được và đã vá
+
+| # | Lỗ hổng | Mức | Bằng chứng trước khi vá |
+|---|---|---|---|
+| 1 | **SSRF** — `fetch_from_url` nhận URL người dùng dán, không lọc scheme, không chặn IP nội bộ, đi theo redirect vô điều kiện, không giới hạn kích thước tải | Cao | PoC kéo được nội dung từ dịch vụ chạy trên `127.0.0.1`. Repo deploy lên Railway/Render → `169.254.169.254` làm lộ credentials |
+| 2 | **ReDoS** — filter `contains` gọi `str.contains` để mặc định `regex=True`, giá trị filter do LLM sinh (chịu ảnh hưởng câu hỏi người dùng) | Trung bình–Cao | Pattern `(a+)+$`: thời gian ×4 mỗi 2 ký tự thêm vào (len=22 → 0.64s/dòng). 50 dòng treo >120s |
+| 3 | **Indirect prompt injection** — tên cột và 5 giá trị mẫu mỗi cột nhúng thẳng vào prompt planner, không sanitize | Trung bình | Tác hại bị giới hạn bởi thiết kế plan-grammar: injection thành công cũng chỉ sinh được plan JSON hợp lệ, không dẫn tới thực thi code |
+| 4 | **limit không có trần** | Thấp | `limit: 10**9` qua được validate, phình payload và token khi synthesize |
+
+Bản vá nằm ở `backend/app/services/security.py` (`safe_fetch`, `assert_public_url`,
+`sanitize_for_prompt`, `LITERAL_CONTAINS`).
+
+**Giới hạn còn lại — nói rõ để không phóng đại:**
+- `assert_public_url` phân giải DNS rồi mới request, nên về lý thuyết vẫn còn khe hở
+  DNS rebinding. Bịt hẳn phải connect thẳng bằng IP đã validate và tự set header `Host`.
+- `sanitize_for_prompt` lọc theo danh sách cụm từ — chặn được vector rẻ tiền, không
+  chặn được payload viết lại khéo. Lớp phòng thủ thật vẫn là plan-grammar + validate.
+
 ## Chạy lại
 
 ```bash
+# bộ đối kháng — offline, dùng trong CI
+pytest tests/test_adversarial.py -q
+python tests/test_adversarial.py          # in bảng block rate
+
 # eval đầy đủ (cần server + GEMINI_API_KEY)
 uvicorn backend.app.main:app --port 8000 &
 python tests/eval_100.py --base-url http://localhost:8000 --delay 2 --judge \

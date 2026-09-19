@@ -48,6 +48,7 @@ def _to_response(session: DatasetSession, output: AgentOutput) -> ChatResponse:
         executed_queries=output.executed_queries,
         query_type=output.intent,
         source=output.source,
+        usage=output.usage,
     )
 
 

@@ -4,13 +4,19 @@ import re
 
 import requests
 
+from backend.app.services.security import BlockedURLError, safe_fetch
+
 
 def fetch_from_url(url: str) -> tuple[str, bytes]:
     """Download file từ URL public. Tự detect Google Sheets URL → export CSV."""
     url = _normalize_gsheet_url(url)
     try:
-        resp = requests.get(url, timeout=30, allow_redirects=True)
+        # safe_fetch: chặn URL trỏ vào mạng nội bộ (kể cả qua redirect) và
+        # cắt body ở 10MB. Xem services/security.py.
+        resp = safe_fetch(url, timeout=30)
         resp.raise_for_status()
+    except BlockedURLError as exc:
+        raise ValueError(str(exc)) from exc
     except requests.exceptions.Timeout:
         raise ValueError("Request timeout sau 30 giây.")
     except requests.exceptions.HTTPError as exc:

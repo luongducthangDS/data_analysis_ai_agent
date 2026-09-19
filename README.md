@@ -32,6 +32,8 @@ Backend **validate plan với schema thật của DataFrame** (tên cột, kiể
 | **Safe tool‑calling** | Whitelist action & aggregation, plan validate với DataFrame, thực thi pandas tất định trong "sandbox" thao tác. |
 | **Grounding** | Câu tổng hợp bị **từ chối** nếu chứa con số không khớp kết quả tính (`_numbers_grounded`) → tránh bịa số. |
 | **Evaluation** | `tests/eval_100.py` — 100 câu / 6 dataset, ground truth tính bằng pandas. Chiều cứng `correctness` (số ±10%) + 3 chiều mềm calibrate bằng nhãn tay **và** LLM-as-judge full-100. Baseline: **84/100**, xem [`docs/EVALUATION.md`](docs/EVALUATION.md). |
+| **Observability** | `services/usage.py` đo token / chi phí / độ trễ từng lần gọi LLM, trả kèm trong response API. Eval báo cáo p95·p99 latency, token, `$/1.000 câu hỏi` và lỗi provider tách theo nguyên nhân. Chi phí chưa khai giá được báo `n/a` thay vì `$0`. |
+| **Adversarial testing** | `tests/test_adversarial.py` — 18 đòn tấn công (SSRF / plan escape / prompt injection), chạy offline trong CI, chặn 18/18. Bộ này phát hiện và vá 4 lỗ hổng thật: SSRF ở import-from-URL, ReDoS ở filter `contains`, indirect prompt injection qua dữ liệu upload, `limit` không trần — chi tiết ở [`docs/EVALUATION.md`](docs/EVALUATION.md). |
 | **Fuzzy column resolution** | LLM gọi sai tên cột (thiếu dấu, viết tắt) → resolver khớp mờ về tên thật trước khi validate. |
 | **Multi‑sheet / multi‑file** | Tự phát hiện quan hệ giữa các sheet; planner sinh **cross‑sheet join**; cảnh báo fan‑out khi join 1‑nhiều làm phồng số dòng. |
 | **Full‑stack** | FastAPI + React/Vite, dashboard tự sinh KPI theo domain, export CSV/Markdown, đóng gói Docker, health check. |
@@ -102,7 +104,9 @@ flowchart LR
 ## Kiểm thử
 
 ```bash
-pytest -q                    # 101 unit test (agent, planner, storage, failover, guardrails, multi-sheet)
+pytest -q                    # 141 test (agent, planner, storage, failover, guardrails, multi-sheet, adversarial, usage)
+
+python tests/test_adversarial.py   # in bảng block rate của bộ tấn công đối kháng
 
 # eval end-to-end — cần server đang chạy + GEMINI_API_KEY
 uvicorn backend.app.main:app --port 8000 &

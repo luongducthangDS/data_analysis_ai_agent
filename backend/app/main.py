@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)   # .env thắng biến môi trường máy — xem services/llm_service.py
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
