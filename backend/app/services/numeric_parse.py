@@ -47,7 +47,13 @@ def parse_number(value: object) -> float | None:
     lowered = text.lower()
     for suffix in _UNIT_SUFFIXES:
         if lowered.endswith(suffix):
-            text = text[: len(text) - len(suffix)].strip()
+            candidate = text[: len(text) - len(suffix)].strip()
+            # "1500đ" là số có đơn vị; "GBP" đứng một mình là MÃ TIỀN TỆ.
+            # Không có chốt này thì cả cột Currency bị ép thành 0.0 và dữ liệu
+            # biến mất — đúng nghĩa mất dữ liệu, không phải chuyển kiểu.
+            if not any(ch.isdigit() for ch in candidate):
+                return None
+            text = candidate
             break
     text = re.sub(f"[{re.escape(_CURRENCY_CHARS)}]", "", text).strip()
 

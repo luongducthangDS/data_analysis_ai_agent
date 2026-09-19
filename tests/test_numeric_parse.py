@@ -43,7 +43,12 @@ def test_parse_number_handles_real_formats(raw, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    ["Carretera", "Government", "abc123", "N/A", "", None, float("nan"), "--", "Paseo"],
+    [
+        "Carretera", "Government", "abc123", "N/A", "", None, float("nan"), "--", "Paseo",
+        # Mã tiền tệ đứng một mình là DỮ LIỆU PHÂN LOẠI, không phải số 0.
+        # Từng khiến cả cột Currency của general_ledger bị ép thành 0.0.
+        "GBP", "EUR", "AUD", "USD", "CAD", "VND", "usd",
+    ],
 )
 def test_non_numeric_returns_none_not_zero(raw):
     """Trả 0.0 cho chữ sẽ biến cột tên sản phẩm thành cột toàn 0."""
@@ -200,3 +205,18 @@ def test_non_id_group_by_untouched():
     df = pd.DataFrame({"region": ["Bắc"], "sales": [1]})
     plan = {"action": "aggregate", "group_by": ["region"]}
     assert _repair_id_to_name_group(plan, "doanh thu theo vùng", df) == plan
+
+
+def test_currency_code_column_is_never_coerced():
+    """Chốt chặn hồi quy: cột mã tiền tệ phải giữ nguyên là chữ."""
+    df = pd.DataFrame({"Currency": ["GBP", "EUR", "AUD", "USD", "CAD"] * 4})
+    out = coerce_numeric_columns(df.copy())
+    assert out["Currency"].tolist() == ["GBP", "EUR", "AUD", "USD", "CAD"] * 4
+    assert out["Currency"].nunique() == 5
+
+
+def test_amount_with_currency_suffix_still_parses():
+    """Sửa lỗi trên không được làm hỏng việc đọc số có kèm đơn vị."""
+    assert parse_number("32.000.000 VNĐ") == pytest.approx(32_000_000.0)
+    assert parse_number("1500đ") == pytest.approx(1500.0)
+    assert parse_number("250 USD") == pytest.approx(250.0)
