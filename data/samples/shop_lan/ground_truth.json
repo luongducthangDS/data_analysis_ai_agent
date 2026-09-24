@@ -1,0 +1,103 @@
+{
+  "note": "Dữ liệu MÔ PHỎNG, đáp án tính lại từ chính dữ liệu sinh ra (seed cố định).",
+  "seed": 20260501,
+  "n_orders": 12001,
+  "loi_nhuan_dinh_nghia": "doanh_thu − giam_gia_shop − 5 loại phí − gia_von (đơn Hoàn thành) − chi_phi_hoan (đơn Đã trả hàng) − quảng cáo",
+  "monthly": {
+    "1": {
+      "doanh_thu_thuan": 438095000,
+      "phi_san": 146761825,
+      "ty_le_phi": 0.335,
+      "quang_cao": 30362000,
+      "loi_nhuan_rong": 30774795,
+      "bien_rong": 0.0702
+    },
+    "2": {
+      "doanh_thu_thuan": 396752000,
+      "phi_san": 132911920,
+      "ty_le_phi": 0.335,
+      "quang_cao": 27313000,
+      "loi_nhuan_rong": 28054150,
+      "bien_rong": 0.0707
+    },
+    "3": {
+      "doanh_thu_thuan": 454383000,
+      "phi_san": 152218305,
+      "ty_le_phi": 0.335,
+      "quang_cao": 31052000,
+      "loi_nhuan_rong": 30517285,
+      "bien_rong": 0.0672
+    },
+    "4": {
+      "doanh_thu_thuan": 421971000,
+      "phi_san": 141360285,
+      "ty_le_phi": 0.335,
+      "quang_cao": 29916000,
+      "loi_nhuan_rong": 28316065,
+      "bien_rong": 0.0671
+    },
+    "5": {
+      "doanh_thu_thuan": 443629000,
+      "phi_san": 161924585,
+      "ty_le_phi": 0.365,
+      "quang_cao": 30973000,
+      "loi_nhuan_rong": 15691595,
+      "bien_rong": 0.0354
+    },
+    "6": {
+      "doanh_thu_thuan": 420929000,
+      "phi_san": 153639085,
+      "ty_le_phi": 0.365,
+      "quang_cao": 32628000,
+      "loi_nhuan_rong": 13079385,
+      "bien_rong": 0.0311
+    }
+  },
+  "S1_fee_hike": {
+    "from": "2026-05-01",
+    "hoa_hong_tang_pp": 0.03,
+    "loi_nhuan_thang_4": 28316065,
+    "loi_nhuan_thang_5": 15691595,
+    "ty_le_phi_thang_4": 0.335,
+    "ty_le_phi_thang_5": 0.365,
+    "phi_tang_them_thang_5": 13308870,
+    "tang_gia_de_giu_tien_ve_sau_phi": 0.0472
+  },
+  "S2_loss_skus": [
+    {
+      "sku": "LAN-127",
+      "doanh_thu_thuan": 86543000,
+      "loi_nhuan_truoc_qc": -9012265
+    },
+    {
+      "sku": "LAN-036",
+      "doanh_thu_thuan": 59573000,
+      "loi_nhuan_truoc_qc": -6114225
+    },
+    {
+      "sku": "LAN-034",
+      "doanh_thu_thuan": 44737000,
+      "loi_nhuan_truoc_qc": -5319365
+    }
+  ],
+  "S3_tiktok_ads_week23": {
+    "tuan": [
+      "2026-06-01",
+      "2026-06-07"
+    ],
+    "qc_trung_binh_ngay_4_tuan_truoc": 401857,
+    "qc_trung_binh_ngay_tuan_23": 827000,
+    "dt_trung_binh_ngay_4_tuan_truoc": 5759929,
+    "dt_trung_binh_ngay_tuan_23": 6023286
+  },
+  "S4_return_spike": {
+    "thang": 3,
+    "ty_le_hoan_thang_2": 0.113,
+    "ty_le_hoan_thang_3": 0.1319,
+    "phan_khuc_gay_tang": {
+      "tinh": "Nghệ An",
+      "don_vi_van_chuyen": "J&T Express",
+      "so_don_hoan_tang_them": 34
+    }
+  }
+}
