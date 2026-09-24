@@ -190,9 +190,7 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
         }
 
     # ── 6. "top N [metric]" — group by entity + sort ──────────────────────────
-    _WHO_KW = ("ai ", " ai?", "ai\n", "nguoi nao", "hoc sinh nao", "khach hang nao",
-               "nhan vien nao", "ten nao", "ai la", "la ai", "nao co", "ai co")
-    is_who = any(kw in normalized for kw in _WHO_KW) or normalized.startswith("ai ")
+    is_who = _is_who_question(normalized)
     if metric and any(kw in normalized for kw in ("top", "lon nhat", "nhieu nhat", "cao nhat", "nho nhat", "thap nhat")):
         filters = status_filters or []
         actual_agg = "max" if sort_dir == "desc" else "min"
@@ -614,16 +612,20 @@ CÂU HỎI HIỆN TẠI:
 {question}""".strip()
 
 
-_WHO_REPAIR_KEYWORDS = (
-    "ai ", " ai?", "nguoi nao", "hoc sinh nao", "khach hang nao",
-    "nhan vien nao", "ten nao", "ai la", "la ai", "nao co", "ai co",
+# Khớp NGUYÊN TỪ: kiểu chuỗi con "ai " từng khớp nhầm "lãi tháng 5" (bỏ dấu = "lai thang").
+_WHO_PATTERN = re.compile(
+    r"\b(?:ai|nguoi nao|hoc sinh nao|khach hang nao|nhan vien nao|ten nao|nao co|san pham nao|mat hang nao|cai nao)\b"
 )
+
+
+def _is_who_question(normalized_question: str) -> bool:
+    return bool(_WHO_PATTERN.search(normalized_question))
 
 
 def _repair_who_plan(plan: dict[str, Any], question: str, df: pd.DataFrame) -> dict[str, Any]:
     """If question is a 'who' question but plan has no group_by, inject entity column."""
     normalized = _normalize(question)
-    is_who = any(kw in normalized for kw in _WHO_REPAIR_KEYWORDS) or normalized.startswith("ai ")
+    is_who = _is_who_question(normalized)
     if not is_who or plan.get("group_by"):
         return plan
     cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()

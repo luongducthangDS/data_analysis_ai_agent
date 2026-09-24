@@ -177,6 +177,14 @@ RETURN_STATUSES: tuple[str, ...] = (
 # Minimum canonical columns matched to be considered an e-commerce session
 _MIN_ECOMMERCE_COLS = 2
 
+# Schema chuẩn hoá (ecommerce_semantic, data/samples/shop_lan): map cố định, không đoán substring
+# (đoán substring map status_col → "tinh" vì "tinh" nằm trong "tình trạng đơn").
+NORMALIZED_ORDER_COLS: dict[str, str] = {
+    "order_id_col": "ma_don", "order_date_col": "ngay_dat", "status_col": "trang_thai",
+    "product_name_col": "ten_san_pham", "sku_col": "sku", "quantity_col": "so_luong",
+    "revenue_col": "doanh_thu", "discount_col": "giam_gia_shop", "platform_col": "kenh",
+}
+
 
 def _normalize(text: str) -> str:
     """Strip diacritics, lowercase, collapse whitespace."""
@@ -195,6 +203,9 @@ def detect_ecommerce_columns(df: pd.DataFrame) -> dict[str, str]:
     A session is considered e-commerce if len(result) >= _MIN_ECOMMERCE_COLS.
     Detection is case-insensitive and strips Vietnamese diacritics.
     """
+    if {"ma_don", "trang_thai", "doanh_thu"} <= set(df.columns):
+        return {k: v for k, v in NORMALIZED_ORDER_COLS.items() if v in df.columns}
+
     df_cols = {_normalize(col): col for col in df.columns}
     result: dict[str, str] = {}
 

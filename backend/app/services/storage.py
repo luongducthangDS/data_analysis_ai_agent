@@ -119,6 +119,8 @@ class SessionStore:
         if not all_sheets:
             raise ValueError("No valid sheets found in upload.")
 
+        from backend.app.services.ecommerce_semantic import attach_cogs
+        all_sheets = attach_cogs(all_sheets)
         analysis_df, active_sheet = self._resolve_active_dataframe(all_sheets)
         relationships: list[SheetRelationship] = []
         context = ""
@@ -348,6 +350,8 @@ class SessionStore:
             if not all_sheets:
                 raise KeyError(f"No files could be loaded for session: {session_id}")
 
+            from backend.app.services.ecommerce_semantic import attach_cogs
+            all_sheets = attach_cogs(all_sheets)
             analysis_df, active_sheet = self._resolve_active_dataframe(
                 all_sheets, active_sheet=getattr(row, "active_sheet", None)
             )
@@ -419,9 +423,12 @@ class SessionStore:
             return sheets[key], key
 
         column_sets = {tuple(df.columns.tolist()) for df in sheets.values()}
-        if len(column_sets) == 1:
+        # Đơn TMĐT tách theo sàn + bảng sản phẩm tra cứu → vẫn gộp các bảng đơn cùng schema.
+        orders = {k: df for k, df in sheets.items() if "loi_nhuan_truoc_qc" in df.columns}
+        group = sheets if len(column_sets) == 1 else orders
+        if len(group) > 1 and len({frozenset(df.columns) for df in group.values()}) == 1:
             frames = []
-            for sheet_name, df in sheets.items():
+            for sheet_name, df in group.items():
                 frame = df.copy()
                 frame["_source_sheet"] = sheet_name
                 frames.append(frame)
@@ -478,11 +485,14 @@ class SessionStore:
         Bỏ bước 3 thì `sum()` trên cột toàn NaN trả về 0 và agent báo
         "Tổng lợi nhuận là 0" — xem docs/EVALUATION.md.
         """
+        from backend.app.services.ecommerce_semantic import add_metric_columns, rename_export_columns
+
         df = strip_column_names(df)
+        # 1b. file export Shopee/TikTok → tên cột chuẩn (phải trước bước 2: ngày TikTok là dd/mm).
+        df = rename_export_columns(df)
         df = SessionStore._coerce_datetime_columns(df)
         df = coerce_numeric_columns(df)
         # 4. thêm metric TMĐT tính sẵn (lãi thật, phí sàn) nếu bảng đúng schema đơn hàng.
-        from backend.app.services.ecommerce_semantic import add_metric_columns
         return add_metric_columns(df)
 
     def _coerce_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:

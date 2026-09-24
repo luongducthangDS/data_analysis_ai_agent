@@ -236,7 +236,7 @@ SHOPEE_COLS = {
     "sku": "SKU phân loại hàng", "ten_san_pham": "Tên sản phẩm", "so_luong": "Số lượng",
     "gia_ban": "Giá gốc", "doanh_thu": "Tổng giá bán (sản phẩm)", "giam_gia_shop": "Mã giảm giá của Shop",
     "phi_hoa_hong": "Phí cố định", "phi_thanh_toan": "Phí thanh toán", "phi_voucher_freeship": "Phí Voucher Xtra & Freeship Xtra",
-    "phi_dich_vu": "Phí Dịch Vụ", "thue_khau_tru": "Thuế khấu trừ", "tinh": "Tỉnh/Thành phố",
+    "phi_dich_vu": "Phí Dịch Vụ", "thue_khau_tru": "Thuế khấu trừ", "phi_ship_hoan": "Phí vận chuyển trả hàng", "tinh": "Tỉnh/Thành phố",
     "don_vi_van_chuyen": "Đơn Vị Vận Chuyển",
 }
 TIKTOK_COLS = {
@@ -245,7 +245,7 @@ TIKTOK_COLS = {
     "gia_ban": "SKU Unit Original Price", "doanh_thu": "SKU Subtotal Before Discount",
     "giam_gia_shop": "SKU Seller Discount", "phi_hoa_hong": "Commission Fee", "phi_thanh_toan": "Transaction Fee",
     "phi_voucher_freeship": "Campaign Service Fee", "phi_dich_vu": "Platform Service Fee",
-    "thue_khau_tru": "Tax Withheld", "tinh": "Province", "don_vi_van_chuyen": "Shipping Provider Name",
+    "thue_khau_tru": "Tax Withheld", "phi_ship_hoan": "Return Shipping Fee", "tinh": "Province", "don_vi_van_chuyen": "Shipping Provider Name",
 }
 TIKTOK_STATUS = {"Hoàn thành": "Completed", "Đã huỷ": "Cancelled", "Đã trả hàng": "Returned"}
 
@@ -268,6 +268,8 @@ def write(out: Path = OUT_DIR) -> dict:
     p.assign(gia_von=(p["gia_ban"] * p["ty_le_gia_von"]).round(-2))[
         ["sku", "ten_san_pham", "danh_muc", "gia_ban", "gia_von"]].to_csv(out / "products.csv", index=False)
 
+    # Sàn chỉ biết phí ship chiều về; phần hàng hỏng (return_damage_share) shop tự chịu, không có trong export.
+    o = o.assign(phi_ship_hoan=np.where(o["trang_thai"] == "Đã trả hàng", PARAMS["return_ship_cost"], 0))
     sp = o[o["kenh"] == "Shopee"][list(SHOPEE_COLS)].rename(columns=SHOPEE_COLS)
     sp.to_csv(out / "export_shopee.csv", index=False)
     tt = o[o["kenh"] == "TikTok Shop"][list(TIKTOK_COLS)].copy()
