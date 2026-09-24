@@ -35,7 +35,8 @@ services:
         sync: false
 
       # ── CORS ────────────────────────────────────────────────────────────────
-      # Frontend origin(s), e.g. https://<your-app>.vercel.app. Unset → "*".
+      # Frontend is served from this same service (same origin) — only set this
+      # if another domain must call the API. Unset → "*".
       - key: ALLOWED_ORIGINS
         sync: false
 
