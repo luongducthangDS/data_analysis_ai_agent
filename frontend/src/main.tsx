@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { createRoot } from "react-dom/client";
 import Plot from "react-plotly.js";
 import {
-  Download, Eye, EyeOff, FileText, FolderOpen, KeyRound, LayoutDashboard,
-  LineChart, Link, MessageSquare, Send, Table2, Upload,
+  Check, CircleAlert, Download, Eye, EyeOff, FileSpreadsheet, FileText, GitMerge, KeyRound,
+  LayoutDashboard, LineChart, MessageSquare, Plus, Send, ShieldCheck, Table2, Upload, X,
 } from "lucide-react";
 import "./styles.css";
 
@@ -53,45 +53,51 @@ function SettingsModal({
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div className="modal-head">
-          <span className="modal-title">API Keys</span>
-          <button className="modal-close" onClick={onClose}>✕</button>
-        </div>
-
-        <div className="settings-group">
-          <div className="settings-group-label">LLM Provider</div>
-          <div className="settings-field">
-            <label>Active provider</label>
-            <select
-              className="provider-select"
-              value={keys.provider}
-              onChange={(e) => setKeys((k) => ({ ...k, provider: e.target.value }))}
-            >
-              <option value="auto">Auto (fallback chain)</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="anthropic">Anthropic Claude</option>
-            </select>
-            <div className="settings-hint">
-              Auto mode tries Gemini → Anthropic in order.
-            </div>
+          <div>
+            <h2 className="modal-title" id="settings-title">Khóa API</h2>
+            <p className="modal-sub">Dùng khóa của riêng bạn thay cho khóa máy chủ.</p>
           </div>
+          <button className="modal-close" onClick={onClose} aria-label="Đóng"><X size={16} /></button>
         </div>
 
-        <div className="settings-group">
-          <div className="settings-group-label">API Keys — stored in your browser only</div>
+        <fieldset className="provider-group">
+          <legend>Nhà cung cấp LLM</legend>
+          <div className="provider-options">
+            {[
+              { value: "auto", label: "Tự động" },
+              { value: "gemini", label: "Gemini" },
+              { value: "anthropic", label: "Anthropic" },
+            ].map((o) => (
+              <label key={o.value} className={`provider-option${keys.provider === o.value ? " checked" : ""}`}>
+                <input
+                  type="radio"
+                  name="provider"
+                  value={o.value}
+                  checked={keys.provider === o.value}
+                  onChange={() => setKeys((k) => ({ ...k, provider: o.value }))}
+                />
+                {o.label}
+              </label>
+            ))}
+          </div>
+          <div className="settings-hint">Tự động thử Gemini trước, rồi đến Anthropic.</div>
+        </fieldset>
 
+        <div className="settings-group">
           {[
-            { id: "gemini",    label: "Google Gemini API Key", tag: "Free tier",   placeholder: "AIza...",     recommended: true },
-            { id: "anthropic", label: "Anthropic API Key",     tag: "Paid",        placeholder: "sk-ant-...",  recommended: false },
+            { id: "gemini",    label: "Gemini API key",    tag: "Free tier", placeholder: "AIza…",    recommended: true },
+            { id: "anthropic", label: "Anthropic API key", tag: "Trả phí",   placeholder: "sk-ant-…", recommended: false },
           ].map(({ id, label, tag, placeholder, recommended }) => (
             <div className="settings-field" key={id}>
-              <label>
+              <label htmlFor={`key-${id}`}>
                 {label}
                 <span className={`tag${recommended ? " recommended" : ""}`}>{tag}</span>
               </label>
               <div className="settings-input-wrap">
                 <input
+                  id={`key-${id}`}
                   className="settings-input"
                   type={reveal[id as keyof typeof reveal] ? "text" : "password"}
                   placeholder={placeholder}
@@ -104,7 +110,7 @@ function SettingsModal({
                   className="toggle-reveal"
                   type="button"
                   onClick={() => setReveal((r) => ({ ...r, [id]: !r[id as keyof typeof r] }))}
-                  title="Toggle visibility"
+                  aria-label={reveal[id as keyof typeof reveal] ? `Ẩn ${label}` : `Hiện ${label}`}
                 >
                   {reveal[id as keyof typeof reveal] ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
@@ -112,16 +118,20 @@ function SettingsModal({
             </div>
           ))}
 
-          <div className="settings-hint">
-            Keys are saved to <code>localStorage</code> in your browser and sent as HTTP headers.
-            They never leave your device except to the backend you're running.
-          </div>
         </div>
 
+        <p className="settings-notice">
+          <ShieldCheck size={16} aria-hidden="true" />
+          <span>
+            Khóa chỉ lưu trong trình duyệt này (<code>localStorage</code>) và gửi kèm yêu cầu dưới dạng HTTP header
+            tới backend. Để trống để dùng khóa cấu hình trên máy chủ.
+          </span>
+        </p>
+
         <div className="modal-actions">
-          {saved && <span className="save-toast">✓ Saved!</span>}
-          <button className="btn-cancel" onClick={onClose}>Cancel</button>
-          <button className="btn-save" onClick={handleSave}>Save keys</button>
+          {saved && <span className="save-toast"><Check size={14} /> Đã lưu</span>}
+          <button className="btn-cancel" onClick={onClose}>Hủy</button>
+          <button className="btn-save" onClick={handleSave}>Lưu khóa</button>
         </div>
       </div>
     </div>
@@ -301,34 +311,39 @@ const NODE_LABELS: Record<string, string> = {
   off_topic:  "Off Topic",
 };
 
-function NodeProgress({ nodes }: { nodes: string[] }) {
+const PIPELINE = ["classify", "planner", "execute", "synthesize"];
+
+// Full pipeline as a stepper: done ✓ / running ● / pending ○. Short-circuit routes
+// (bot_info, off_topic) never enter the pipeline, so they show only what ran.
+function NodeProgress({ nodes, streaming }: { nodes: string[]; streaming?: boolean }) {
   if (!nodes.length) return null;
+  const steps = nodes.some((n) => !PIPELINE.includes(n)) ? nodes : PIPELINE;
+  const firstPending = steps.findIndex((n) => !nodes.includes(n));
   return (
-    <div className="node-progress">
-      {nodes.map((n) => (
-        <span key={n} className="node-chip done">{NODE_LABELS[n] ?? n} ✓</span>
-      ))}
-    </div>
+    <ol className="node-progress" aria-label="Tiến trình agent">
+      {steps.map((n, i) => {
+        const state = nodes.includes(n) ? "done" : streaming && i === firstPending ? "running" : "pending";
+        return (
+          <li key={n} className={`node-step ${state}`}>
+            {state === "done" ? <Check size={12} strokeWidth={3} aria-hidden="true" /> : <span className="node-dot" aria-hidden="true" />}
+            {NODE_LABELS[n] ?? n}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
 // ── Agent Steps display ───────────────────────────────────────────────────────
-const TOOL_ICONS: Record<string, string> = {
-  analyze_data: "📊",
-  query_sql: "🔍",
-  get_profile: "🗂️",
-  generate_chart: "📈",
-};
-
 function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
   if (!steps.length) return null;
   return (
     <details className="agent-steps">
-      <summary>🤖 Agent thực hiện {steps.length} bước</summary>
+      <summary>Agent thực hiện {steps.length} bước</summary>
       <div className="agent-steps-list">
         {steps.map((s) => (
           <div key={s.step} className="agent-step-item">
-            <span className="agent-step-icon">{TOOL_ICONS[s.tool_name] ?? "🔧"}</span>
+            <span className="agent-step-icon">{s.step}</span>
             <div className="agent-step-body">
               <span className="agent-step-name">{s.tool_name}</span>
               <span className="agent-step-summary">{s.result_summary.slice(0, 120)}</span>
@@ -351,13 +366,35 @@ function KPICardComponent({ card }: { card: KPICard }) {
           {card.delta_positive ? "▲" : "▼"} {card.delta}
         </div>
       )}
-      {card.formula && (
-        <details className="kpi-formula">
-          <summary>Xem công thức</summary>
-          <span>{card.formula}</span>
-        </details>
-      )}
+      {card.formula && <div className="kpi-formula" title={card.formula}>{card.formula}</div>}
     </div>
+  );
+}
+
+// Workspace charts share one card shape; Plotly colours are tuned for the dark theme.
+function ChartCard({ chart, height, exportHref }: { chart: ChartSpec; height: number; exportHref?: string }) {
+  return (
+    <figure className="chart-card">
+      <div className="chart-head">
+        <figcaption className="chart-title">{chart.title}</figcaption>
+        {exportHref && <a className="chart-export-link" href={exportHref} download>Tải PNG</a>}
+      </div>
+      <Plot
+        data={chart.plotly_json.data as never}
+        layout={{
+          ...(chart.plotly_json.layout as object),
+          paper_bgcolor: "transparent",
+          plot_bgcolor: "transparent",
+          font: { color: "#a9b0d6", family: "Be Vietnam Pro, sans-serif" },
+          colorway: ["#5eead4", "#a78bfa", "#f6c177", "#56609e", "#99f6e4"],
+          xaxis: { automargin: true, gridcolor: "rgba(129,140,248,.14)", zerolinecolor: "rgba(129,140,248,.3)", ...((chart.plotly_json.layout as Record<string, object>).xaxis ?? {}) },
+          yaxis: { automargin: true, gridcolor: "rgba(129,140,248,.14)", zerolinecolor: "rgba(129,140,248,.3)", ...((chart.plotly_json.layout as Record<string, object>).yaxis ?? {}) },
+          margin: { l: 56, r: 16, t: 24, b: 56 },
+        }}
+        useResizeHandler style={{ width: "100%", height: `${height}px` }}
+        config={{ displayModeBar: false }}
+      />
+    </figure>
   );
 }
 
@@ -365,47 +402,52 @@ function KPICardComponent({ card }: { card: KPICard }) {
 function DashboardPanel({
   data,
   sessionId,
+  sheetName,
   onAsk,
 }: {
   data: DashboardData;
   sessionId: string;
+  sheetName: string;
   onAsk: (q: string) => void;
 }) {
   const [subTab, setSubTab] = React.useState<"kpi" | "products" | "trends">("kpi");
   const trendChart = data.charts.find((c) => c.chart_type === "line");
   const otherCharts = data.charts.filter((c) => c.chart_type !== "line");
+  const chartPng = (id: string) => `/api/dashboard/${sessionId}/export-chart/${id}.png`;
 
   return (
     <div className="panel dashboard-panel">
-      <div className="panel-head">
-        Dashboard
+      <div className="panel-title-row">
+        <div className="panel-title-block">
+          <h2 className="panel-head">Tổng quan{sheetName ? ` ${sheetName}` : ""}</h2>
+          <p className="panel-sub">KPI do agent chọn theo miền dữ liệu đã nhận diện</p>
+        </div>
         {data.platform && (
           <span className="platform-badge">{data.platform.charAt(0).toUpperCase() + data.platform.slice(1)}</span>
         )}
-        <a className="export-xlsx-btn" href={`/api/dashboard/${sessionId}/export.xlsx`} download>
-          <Download size={13} /> Xuất Excel
-        </a>
       </div>
 
-      {data.unmapped_cols.length > 0 && (
-        <div className="unmapped-notice">
-          ⚠ Không nhận diện được: {data.unmapped_cols.join(", ")} — hỏi chatbot để phân tích thủ công.
+      <div className="dashboard-toolbar">
+        <div className="segmented" role="group" aria-label="Chế độ xem">
+          {(["kpi", "products", "trends"] as const).map((t) => (
+            <button
+              key={t}
+              className={`dash-tab${subTab === t ? " active" : ""}`}
+              aria-pressed={subTab === t}
+              onClick={() => setSubTab(t)}
+            >
+              {t === "kpi" && "KPI"}
+              {t === "products" && "Top 10"}
+              {t === "trends" && "Xu hướng"}
+            </button>
+          ))}
         </div>
-      )}
-
-      {/* Sub-tabs */}
-      <div className="dashboard-subtabs">
-        {(["kpi", "products", "trends"] as const).map((t) => (
-          <button
-            key={t}
-            className={`dash-tab${subTab === t ? " active" : ""}`}
-            onClick={() => setSubTab(t)}
-          >
-            {t === "kpi" && "KPI"}
-            {t === "products" && "Top 10"}
-            {t === "trends" && "Xu hướng"}
-          </button>
-        ))}
+        {data.unmapped_cols.length > 0 && (
+          <p className="unmapped-notice" title="Hỏi chatbot để phân tích các cột này thủ công">
+            <CircleAlert size={14} aria-hidden="true" />
+            Chưa nhận diện cột <span className="mono">{data.unmapped_cols.join(", ")}</span>
+          </p>
+        )}
       </div>
 
       {/* KPI sub-tab */}
@@ -418,34 +460,21 @@ function DashboardPanel({
           </div>
           {/* Non-trend charts (bar charts: top products, by platform) */}
           {otherCharts.length > 0 && (
-            <div className="chart-grid" style={{ marginTop: 24 }}>
+            <div className="chart-grid">
               {otherCharts.map((c) => (
-                <div key={c.chart_id} className="chart-card">
-                  <div className="chart-title">{c.title}</div>
-                  <Plot
-                    data={c.plotly_json.data as never}
-                    layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 120, r: 16, t: 32, b: 48 } }}
-                    useResizeHandler style={{ width: "100%", height: "320px" }}
-                    config={{ displayModeBar: false }}
-                  />
-                  <a
-                    className="chart-export-link"
-                    href={`/api/dashboard/${sessionId}/export-chart/${c.chart_id}.png`}
-                    download
-                  >
-                    Tải ảnh
-                  </a>
-                </div>
+                <ChartCard key={c.chart_id} chart={c} height={300} exportHref={chartPng(c.chart_id)} />
               ))}
             </div>
           )}
           {/* AI-generated suggested queries */}
           {data.suggested_queries?.length > 0 && (
-            <div className="suggestions" style={{ marginTop: 20 }}>
+            <div className="suggestions">
               <div className="sugg-label">Phân tích sâu hơn</div>
-              {data.suggested_queries.map((q) => (
-                <button key={q} className="chip" onClick={() => onAsk(q)}>{q}</button>
-              ))}
+              <div className="chip-wrap">
+                {data.suggested_queries.map((q) => (
+                  <button key={q} className="chip" onClick={() => onAsk(q)}>{q}</button>
+                ))}
+              </div>
             </div>
           )}
         </>
@@ -485,22 +514,7 @@ function DashboardPanel({
       {subTab === "trends" && (
         <div>
           {trendChart ? (
-            <div className="chart-card" style={{ marginTop: 8 }}>
-              <div className="chart-title">{trendChart.title}</div>
-              <Plot
-                data={trendChart.plotly_json.data as never}
-                layout={{ ...(trendChart.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 56, r: 16, t: 32, b: 64 } }}
-                useResizeHandler style={{ width: "100%", height: "360px" }}
-                config={{ displayModeBar: false }}
-              />
-              <a
-                className="chart-export-link"
-                href={`/api/dashboard/${sessionId}/export-chart/${trendChart.chart_id}.png`}
-                download
-              >
-                Tải ảnh
-              </a>
-            </div>
+            <ChartCard chart={trendChart} height={360} exportHref={chartPng(trendChart.chart_id)} />
           ) : (
             <div className="empty">
               <div className="empty-sub">Không có dữ liệu xu hướng (cần cột ngày đặt hàng)</div>
@@ -530,45 +544,58 @@ function SheetsPanel({
   onMerge: (names: string[], joinKey: string | null) => void;
   busy: boolean;
 }) {
+  const files = Array.from(new Set(sheets.map((s) => s.file_name).filter(Boolean)));
+  const joinable = relationships.filter((r) => r.join_key);
   return (
-    <div className="sheets-panel">
-      <div className="sheets-label">Sheet / File ({sheets.length})</div>
-      <div className="sheets-list">
-        {sheets.map((s) => {
-          const key = sheetKey(s);
-          const active = key === activeSheet;
-          return (
-            <button
-              key={key}
-              className={`sheet-item${active ? " active" : ""}`}
-              disabled={busy}
-              onClick={() => onSwitch(key)}
-              title={s.column_names.join(", ")}
-            >
-              <span className="sheet-name">{s.name}</span>
-              <span className="sheet-meta">{s.rows.toLocaleString()}×{s.columns}</span>
-              {active && <span className="sheet-active-dot">●</span>}
-            </button>
-          );
-        })}
+    <>
+      <div className="sheets-panel">
+        <div className="sheets-label">
+          <FileSpreadsheet size={16} aria-hidden="true" />
+          <span className="sheets-file">{files.length === 1 ? files[0] : `${files.length || sheets.length} tệp`}</span>
+          <span className="sheets-count">{sheets.length} sheet</span>
+        </div>
+        <div className="sheets-list">
+          {sheets.map((s) => {
+            const key = sheetKey(s);
+            const active = key === activeSheet;
+            return (
+              <button
+                key={key}
+                className={`sheet-item${active ? " active" : ""}`}
+                aria-current={active || undefined}
+                disabled={busy}
+                onClick={() => onSwitch(key)}
+                title={s.column_names.join(", ")}
+              >
+                <span className="sheet-dot" aria-hidden="true" />
+                <span className="sheet-name">{s.name}</span>
+                <span className="sheet-meta">{s.rows.toLocaleString("vi-VN")}×{s.columns}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
-      {relationships.filter((r) => r.join_key).length > 0 && (
+      {joinable.length > 0 && (
         <div className="sheets-rels">
-          <div className="sheets-rel-label">Có thể gộp:</div>
-          {relationships.filter((r) => r.join_key).map((r, i) => (
-            <button
-              key={i}
-              className="sheet-merge-btn"
-              disabled={busy}
-              onClick={() => onMerge([r.sheet1, r.sheet2], r.join_key)}
-              title={`Join trên ${r.join_key}`}
-            >
-              ⇄ {r.sheet1.split("::").pop()} + {r.sheet2.split("::").pop()}
-            </button>
+          <div className="sheets-rel-label">Có thể gộp</div>
+          {joinable.map((r, i) => (
+            <div key={i} className="sheet-rel">
+              <div className="sheet-rel-text">
+                <span>{r.sheet1.split("::").pop()} ↔ {r.sheet2.split("::").pop()}</span>
+                <span className="sheet-rel-key">qua {r.join_key}</span>
+              </div>
+              <button
+                className="sheet-merge-btn"
+                disabled={busy}
+                onClick={() => onMerge([r.sheet1, r.sheet2], r.join_key)}
+              >
+                <GitMerge size={14} aria-hidden="true" /> Gộp
+              </button>
+            </div>
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -591,8 +618,8 @@ function App() {
   const [relationships, setRelationships] = useState<SheetRelationship[]>([]);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [importTab, setImportTab] = useState<"file" | "url">("file");
   const [importUrl, setImportUrl] = useState("");
+  const [showImport, setShowImport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeys, setApiKeys] = useState(loadKeys);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -633,6 +660,7 @@ function App() {
     setSheets([]);
     setRelationships([]);
     setTab("preview");
+    setShowImport(false);
 
     // Multi-sheet / multi-file workbook → load the sheet inventory so the user can
     // see + switch which sheet is analyzed (no more silent single-sheet selection).
@@ -831,6 +859,48 @@ function App() {
 
   const numericCount = profile ? Object.keys(profile.numeric_summary).length : 0;
   const missingCount = profile ? Object.values(profile.missing_values).reduce((a, b) => a + b, 0) : 0;
+  const sheetName = activeSheet === "__concat__"
+    ? `gộp ${sheets.length} sheet`
+    : (activeSheet?.split("::").pop() ?? "");
+  const hasDashboard = !!dashboardData?.kpi_cards?.length;
+
+  const dropHandlers = {
+    onDragOver: (e: React.DragEvent) => { e.preventDefault(); setDragging(true); },
+    onDragLeave: () => setDragging(false),
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); },
+  };
+
+  const urlImport = (compact: boolean) => (
+    <div className={`url-import${compact ? " compact" : ""}`}>
+      <label htmlFor={compact ? "import-url-rail" : "import-url"}>{compact ? "Nhập từ URL" : "Hoặc nhập từ URL"}</label>
+      <div className="url-row">
+        <input id={compact ? "import-url-rail" : "import-url"} className="import-input" type="url"
+          placeholder="https://docs.google.com/spreadsheets/…"
+          value={importUrl} onChange={(e) => setImportUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleImportUrl()} />
+        <button className="import-btn" disabled={!importUrl.trim() || busy} onClick={handleImportUrl}>
+          {busy ? "Đang tải…" : "Nhập"}
+        </button>
+      </div>
+      <span className="import-hint">CSV/XLSX công khai, Google Sheets chia sẻ “bất kỳ ai có đường liên kết”, liên kết Dropbox</span>
+    </div>
+  );
+
+  // Starfield + planet sit behind the welcome screen only; data screens stay calm.
+  const planet = (
+    <svg className="welcome-planet" viewBox="0 0 440 320" aria-hidden="true">
+      <defs>
+        <linearGradient id="planet-g" x1="150" y1="40" x2="330" y2="240" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#a78bfa" />
+          <stop offset=".55" stopColor="#4c3fb8" />
+          <stop offset="1" stopColor="#0e1240" />
+        </linearGradient>
+      </defs>
+      <circle cx="240" cy="150" r="92" fill="url(#planet-g)" />
+      <ellipse cx="240" cy="150" rx="170" ry="30" fill="none" stroke="#c4b5fd" strokeOpacity=".45" strokeWidth="2" transform="rotate(-18 240 150)" />
+      <ellipse cx="240" cy="150" rx="200" ry="38" fill="none" stroke="#5eead4" strokeOpacity=".2" transform="rotate(-18 240 150)" />
+    </svg>
+  );
 
   return (
     <div className="layout">
@@ -843,11 +913,13 @@ function App() {
           }}
         />
       )}
+      <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.xls" hidden
+        onChange={(e) => { if (e.target.files) handleFiles(e.target.files); e.target.value = ""; }} />
 
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="brand">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+          <svg width="30" height="30" viewBox="0 0 28 28" fill="none" aria-hidden="true">
             <defs>
               <linearGradient id="brand-g" x1="6" y1="6" x2="22" y2="22" gradientUnits="userSpaceOnUse">
                 <stop offset="0%" stopColor="#a78bfa"/>
@@ -861,102 +933,123 @@ function App() {
           <span>DataAgent</span>
         </div>
 
-        <div className="import-panel">
-          <div className="import-tabs">
-            {(["file", "url"] as const).map((t) => (
-              <button key={t} className={`import-tab${importTab === t ? " active" : ""}`}
-                onClick={() => setImportTab(t)}>
-                {t === "file" && <FolderOpen size={16} />}{t === "url" && <Link size={16} />}
+        <section className="rail-section">
+          <h2 className="rail-label">Nguồn dữ liệu</h2>
+          {!sessionId ? (
+            <p className="rail-empty">Chưa có dữ liệu. Tệp và sheet bạn tải lên sẽ hiện ở đây.</p>
+          ) : (
+            <>
+              <button className="rail-add" aria-expanded={showImport} onClick={() => setShowImport((v) => !v)}>
+                <Plus size={16} aria-hidden="true" /> Thêm tệp hoặc URL
               </button>
-            ))}
-          </div>
-
-          {importTab === "file" && (
-            <div
-              className={`drop-zone${dragging ? " dragging" : ""}`}
-              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
-              onClick={() => fileRef.current?.click()}
-            >
-              <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.xls"
-                style={{ display: "none" }} onChange={(e) => e.target.files && handleFiles(e.target.files)} />
-              <span className="drop-icon"><Upload size={22} /></span>
-              <span>{busy && !profile ? "Uploading…" : "Drop CSV / XLSX or click"}</span>
-            </div>
+              {showImport && (
+                <div className="rail-import">
+                  <div className={`drop-zone${dragging ? " dragging" : ""}`} {...dropHandlers}>
+                    <span className="drop-icon"><Upload size={18} /></span>
+                    <span>Kéo thả tệp vào đây</span>
+                    <button className="btn-link" onClick={() => fileRef.current?.click()} disabled={busy}>
+                      {busy ? "Đang tải lên…" : "Chọn tệp"}
+                    </button>
+                  </div>
+                  {urlImport(true)}
+                </div>
+              )}
+              {sheets.length > 1 && (
+                <SheetsPanel
+                  sheets={sheets}
+                  relationships={relationships}
+                  activeSheet={activeSheet}
+                  sheetKey={sheetKey}
+                  onSwitch={switchSheet}
+                  onMerge={mergeSheets}
+                  busy={busy}
+                />
+              )}
+            </>
           )}
-
-          {importTab === "url" && (
-            <div className="import-form">
-              <input className="import-input" type="text"
-                placeholder="Dán URL file CSV, XLSX hoặc Google Sheets…"
-                value={importUrl} onChange={(e) => setImportUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleImportUrl()} />
-              <button className="import-btn" disabled={!importUrl.trim() || busy}
-                onClick={handleImportUrl}>
-                {busy ? "Đang tải…" : "Import từ URL"}
-              </button>
-              <div className="import-hint">CSV / XLSX public, Google Sheets share "anyone with link", Dropbox shared links</div>
-            </div>
-          )}
-        </div>
-
-        {sheets.length > 1 && (
-          <SheetsPanel
-            sheets={sheets}
-            relationships={relationships}
-            activeSheet={activeSheet}
-            sheetKey={sheetKey}
-            onSwitch={switchSheet}
-            onMerge={mergeSheets}
-            busy={busy}
-          />
-        )}
+        </section>
 
         {profile && (
-          <div className="info-panel">
-            <div className="info-row"><span>Rows</span><b>{profile.rows.toLocaleString()}</b></div>
-            <div className="info-row"><span>Columns</span><b>{profile.columns}</b></div>
-            <div className="info-row"><span>Numeric</span><b>{numericCount}</b></div>
-            <div className="info-row"><span>Missing</span><b>{missingCount}</b></div>
-          </div>
+          <section className="rail-section">
+            <h2 className="rail-label">{sheets.length > 1 ? "Sheet đang phân tích" : "Dữ liệu đang phân tích"}</h2>
+            <div className="stat-grid">
+              <div className="stat"><span>Dòng</span><b>{profile.rows.toLocaleString("vi-VN")}</b></div>
+              <div className="stat"><span>Cột</span><b>{profile.columns}</b></div>
+              <div className="stat"><span>Cột số</span><b>{numericCount}</b></div>
+              <div className="stat"><span>Ô thiếu</span><b className={missingCount ? "warn" : ""}>{missingCount.toLocaleString("vi-VN")}</b></div>
+            </div>
+          </section>
         )}
 
-        {sessionId && (
-          <a className="report-link" href={`/api/session/${sessionId}/data.csv`} download>
-            <Download size={14} /> Export CSV
-          </a>
-        )}
-        {reportId && (
-          <a className="report-link" href={`/api/report/${reportId}`} target="_blank" rel="noreferrer">
-            <FileText size={14} /> Download Report
-          </a>
-        )}
-
-        {/* Settings button — always visible at bottom */}
         <div className="sidebar-footer">
+          {sessionId && (
+            <a className="report-link" href={`/api/session/${sessionId}/data.csv`} download>
+              <Download size={16} aria-hidden="true" /> Tải CSV đã xử lý
+            </a>
+          )}
+          {reportId && (
+            <a className="report-link" href={`/api/report/${reportId}`} target="_blank" rel="noreferrer">
+              <FileText size={16} aria-hidden="true" /> Báo cáo Markdown
+            </a>
+          )}
           <button className="btn-settings" onClick={() => setShowSettings(true)}>
-            <KeyRound size={14} /> API Keys
-            <span className={`key-indicator${hasKey ? " active" : ""}`} title={hasKey ? "Keys configured" : "No keys — using server .env"} />
+            <KeyRound size={16} aria-hidden="true" />
+            <span className="btn-settings-label">Khóa API</span>
+            <span className="btn-settings-status">{hasKey ? "Khóa riêng" : "Máy chủ"}</span>
+            <span className={`key-indicator${hasKey ? " active" : ""}`} aria-hidden="true" />
           </button>
         </div>
       </aside>
 
-      {/* Main — chat column (always visible) + workspace column */}
+      {!sessionId ? (
+        /* ── Welcome — nothing uploaded yet ── */
+        <main className="welcome">
+          {planet}
+          <div className="welcome-inner">
+            <div className="welcome-intro">
+              <span className="eyebrow">Phân tích dữ liệu bằng hội thoại</span>
+              <h1>Hỏi dữ liệu của bạn bằng <span className="grad-text">tiếng Việt.</span></h1>
+              <p>Tải CSV hoặc Excel lên. Agent lập kế hoạch phân tích, chạy trên pandas và trả về số liệu,
+                biểu đồ cùng tóm tắt — mọi con số đều khớp với kết quả tính.</p>
+            </div>
+
+            <div className={`drop-hero${dragging ? " dragging" : ""}`} {...dropHandlers}>
+              <div className="drop-hero-icon"><Upload size={24} aria-hidden="true" /></div>
+              <div className="drop-hero-text">
+                <strong>Kéo thả tệp CSV, XLSX hoặc XLS vào đây</strong>
+                <span>Nhiều tệp cùng lúc · tự nhận diện sheet và quan hệ giữa chúng</span>
+              </div>
+              <button className="btn-accent" onClick={() => fileRef.current?.click()} disabled={busy}>
+                {busy ? "Đang tải lên…" : "Chọn tệp"}
+              </button>
+            </div>
+
+            {urlImport(false)}
+
+            <ol className="how-steps">
+              <li><span className="how-num">01 · Lập kế hoạch</span>LLM chỉ sinh kế hoạch JSON, được kiểm tra với schema thật của bảng.</li>
+              <li><span className="how-num violet">02 · Thực thi</span>Chạy tất định trên pandas. Không eval, không SQL tự do.</li>
+              <li><span className="how-num amber">03 · Đối chiếu</span>Câu trả lời bị loại nếu chứa con số không khớp kết quả tính.</li>
+            </ol>
+          </div>
+        </main>
+      ) : (
+      /* Main — chat column (always visible) + workspace column */
       <main className="main">
         {/* ── Chat column — permanent, no longer a tab ── */}
         <section className="chat-col">
           <div className="col-head">
-            <span className="col-title">Trò chuyện</span>
+            <h2 className="col-title">Trò chuyện</h2>
+            {sheetName && <span className="col-sub">với sheet {sheetName}</span>}
             {busy && <span className="col-status">Đang xử lý…</span>}
           </div>
 
           <div className="messages">
             {messages.length === 0 && (
               <div className="empty">
-                <div className="empty-icon"><MessageSquare size={40} strokeWidth={1.5} /></div>
+                <div className="empty-icon"><MessageSquare size={32} strokeWidth={1.5} /></div>
                 <div className="empty-title">Hỏi bất kỳ điều gì về dữ liệu</div>
-                <div className="empty-sub">vd. "tổng amount theo category" · "top 5 nhân viên"</div>
+                <div className="empty-sub">vd. "tổng doanh thu theo vùng" · "top 5 sản phẩm"</div>
               </div>
             )}
             {messages.map((msg, i) => (
@@ -964,79 +1057,64 @@ function App() {
                 {msg.role === "user" ? (
                   <div className="bubble">{msg.content}</div>
                 ) : (
-                  <div className="assistant-msg">
-                    <div className="bubble">
-                      {/* Node progress (while streaming) */}
+                  <>
+                    <svg className="msg-avatar" width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+                      <circle cx="14" cy="14" r="8" fill="url(#brand-g)" />
+                      <ellipse cx="14" cy="14" rx="13" ry="4.5" fill="none" stroke="#edefff" strokeOpacity=".85" strokeWidth="1.4" transform="rotate(-20 14 14)" />
+                    </svg>
+                    <div className="assistant-msg">
                       {msg.nodes && msg.nodes.length > 0 && (
-                        <NodeProgress nodes={msg.nodes} />
+                        <NodeProgress nodes={msg.nodes} streaming={msg.streaming} />
                       )}
-                      {/* Answer text */}
                       {msg.content ? (
-                        <MdText text={msg.content} />
+                        <div className="answer">
+                          <MdText text={msg.content} />
+                          {msg.streaming && <span className="cursor">▋</span>}
+                        </div>
                       ) : msg.streaming ? (
-                        <div className="typing"><span/><span/><span/></div>
+                        <div className="skeleton" aria-label="Đang trả lời"><span /><span /></div>
                       ) : null}
-                      {/* Streaming cursor */}
-                      {msg.streaming && msg.content && (
-                        <span className="cursor">▋</span>
-                      )}
-                      {/* Source badge — shown after streaming done */}
-                      {!msg.streaming && msg.source && (
-                        <div className="msg-meta">
-                          <SourceBadge source={msg.source} />
+                      {msg.charts && msg.charts.length > 0 && (
+                        <div className="msg-charts">
+                          {msg.charts.map((c) => <ChartCard key={c.chart_id} chart={c} height={260} />)}
                         </div>
                       )}
                       {msg.agentSteps && <AgentStepsPanel steps={msg.agentSteps} />}
-                      {msg.queries && msg.queries.length > 0 && (
-                        <PlanDetail queries={msg.queries} />
+                      {msg.queries && msg.queries.length > 0 && <PlanDetail queries={msg.queries} />}
+                      {!msg.streaming && msg.source && (
+                        <div className="msg-meta"><SourceBadge source={msg.source} /></div>
                       )}
                     </div>
-                    {msg.charts && msg.charts.length > 0 && (
-                      <div className="msg-charts">
-                        {msg.charts.map((c) => (
-                          <div key={c.chart_id} className="chart-card">
-                            <div className="chart-title">{c.title}</div>
-                            <Plot
-                              data={c.plotly_json.data as never}
-                              layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 48, r: 16, t: 32, b: 48 } }}
-                              useResizeHandler style={{ width: "100%", height: "280px" }}
-                              config={{ displayModeBar: false }}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  </>
                 )}
               </div>
             ))}
             <div ref={bottomRef} />
           </div>
 
-          {/* Suggested queries — moved out of the sidebar, next to where they're used */}
-          {suggestions.length > 0 && (
-            <div className="chat-suggestions">
-              <div className="sugg-label">Gợi ý</div>
-              <div className="sugg-row">
+          <div className="composer">
+            {suggestions.length > 0 && (
+              <div className="chat-suggestions">
+                <span className="sugg-label">Gợi ý</span>
                 {suggestions.map((s) => (
                   <button key={s} className="chip" disabled={busy} onClick={() => send(s)}>{s}</button>
                 ))}
               </div>
-            </div>
-          )}
-
-          <div className="input-bar">
-            <textarea rows={2}
-              placeholder={sessionId ? "Hỏi về dataset… Enter gửi, Shift+Enter xuống dòng" : "Upload dataset trước để bắt đầu"}
-              value={question} disabled={!sessionId || busy}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
-            />
-            <div className="input-btns">
-              <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
-                onClick={() => send(question)}>
-                {busy ? "Đang xử lý…" : <><Send size={15} /> Phân tích</>}
-              </button>
+            )}
+            <div className="input-bar">
+              <label htmlFor="ask" className="sr-only">Câu hỏi về dữ liệu</label>
+              <textarea id="ask" rows={2}
+                placeholder="Hỏi về dữ liệu… Enter để gửi, Shift+Enter xuống dòng"
+                value={question} disabled={busy}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
+              />
+              <div className="input-btns">
+                <span className="input-hint">Agent chỉ sinh kế hoạch JSON — không chạy code tùy ý</span>
+                <button className="btn-primary" disabled={!question.trim() || busy} onClick={() => send(question)}>
+                  {busy ? "Đang xử lý…" : <><Send size={15} aria-hidden="true" /> Phân tích</>}
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -1044,17 +1122,32 @@ function App() {
         {/* ── Workspace column — dashboard / data / charts ── */}
         <section className="workspace">
           <div className="ws-tabs">
-            {dashboardData && dashboardData.kpi_cards?.length > 0 && (
-              <button className={`ws-tab${tab === "dashboard" ? " active" : ""}`}
-                onClick={() => setTab("dashboard")}><LayoutDashboard size={15} /> Dashboard</button>
+            <nav className="ws-tab-list" aria-label="Workspace">
+              {hasDashboard && (
+                <button className={`ws-tab${tab === "dashboard" ? " active" : ""}`}
+                  aria-current={tab === "dashboard" ? "page" : undefined}
+                  onClick={() => setTab("dashboard")}><LayoutDashboard size={15} aria-hidden="true" /> Tổng quan</button>
+              )}
+              <button className={`ws-tab${tab === "preview" ? " active" : ""}`}
+                aria-current={tab === "preview" ? "page" : undefined}
+                onClick={() => setTab("preview")}><Table2 size={15} aria-hidden="true" /> Dữ liệu</button>
+              <button className={`ws-tab${tab === "charts" ? " active" : ""}`}
+                aria-current={tab === "charts" ? "page" : undefined}
+                onClick={() => setTab("charts")}>
+                <LineChart size={15} aria-hidden="true" /> Biểu đồ
+                {allCharts.length > 0 && <span className="badge">{allCharts.length}</span>}
+              </button>
+            </nav>
+            {tab === "dashboard" && hasDashboard && (
+              <a className="export-xlsx-btn" href={`/api/dashboard/${sessionId}/export.xlsx`} download>
+                <Download size={14} aria-hidden="true" /> Xuất Excel
+              </a>
             )}
-            <button className={`ws-tab${tab === "preview" ? " active" : ""}`}
-              onClick={() => setTab("preview")}><Table2 size={15} /> Dữ liệu</button>
-            <button className={`ws-tab${tab === "charts" ? " active" : ""}`}
-              onClick={() => setTab("charts")}>
-              <LineChart size={15} /> Biểu đồ
-              {allCharts.length > 0 && <span className="badge">{allCharts.length}</span>}
-            </button>
+            {tab === "preview" && (
+              <a className="export-xlsx-btn" href={`/api/session/${sessionId}/data.csv`} download>
+                <Download size={14} aria-hidden="true" /> Tải CSV
+              </a>
+            )}
           </div>
 
           <div className="ws-body">
@@ -1064,12 +1157,13 @@ function App() {
                 <DashboardPanel
                   data={dashboardData}
                   sessionId={sessionId}
+                  sheetName={sheetName}
                   onAsk={(q) => send(q)}
                 />
               ) : (
                 <div className="panel">
                   <div className="empty">
-                    <div className="empty-icon"><LayoutDashboard size={40} strokeWidth={1.5} /></div>
+                    <div className="empty-icon"><LayoutDashboard size={32} strokeWidth={1.5} /></div>
                     <div className="empty-sub">Chưa có dashboard cho dữ liệu hiện tại</div>
                   </div>
                 </div>
@@ -1079,57 +1173,53 @@ function App() {
             {/* Data preview */}
             {tab === "preview" && (
               <div className="panel">
-                {!sessionId ? (
-                  <div className="empty">
-                    <div className="empty-icon"><FolderOpen size={40} strokeWidth={1.5} /></div>
-                    <div className="empty-title">Chưa có dữ liệu</div>
-                    <div className="empty-sub">Tải lên CSV hoặc Excel ở thanh bên trái để bắt đầu</div>
+                <div className="panel-title-block">
+                  <h2 className="panel-head">{sheetName || "Dữ liệu"}</h2>
+                  <p className="panel-sub">
+                    {profile?.rows.toLocaleString("vi-VN")} dòng · {profile?.columns} cột · xem trước {previewRows.length} dòng đầu
+                  </p>
+                </div>
+                {sheets.length > 1 && (
+                  <div className="active-sheet-banner">
+                    <FileSpreadsheet size={16} aria-hidden="true" />
+                    <span>Đang phân tích <b>{sheetName}</b> · 1 trong {sheets.length} sheet — đổi sheet ở cột trái</span>
                   </div>
-                ) : (
-                  <>
-                    <div className="panel-head">Xem trước <span className="muted">— 10 dòng đầu</span></div>
-                    {sheets.length > 1 && (
-                      <div className="active-sheet-banner">
-                        Đang phân tích: <b>{activeSheet === "__concat__"
-                          ? `Gộp ${sheets.length} sheet cùng cấu trúc`
-                          : (activeSheet?.split("::").pop() ?? activeSheet)}</b>
-                        <span className="muted"> · {sheets.length} sheet — chọn sheet khác ở thanh bên trái</span>
-                      </div>
-                    )}
-                    <div className="tbl-wrap">
-                      <table>
-                        <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-                        <tbody>
-                          {previewRows.map((row, i) => (
-                            <tr key={i}>{previewCols.map((c) => <td key={c}>{row[c] ?? ""}</td>)}</tr>
-                          ))}
-                        </tbody>
-                      </table>
+                )}
+                <div className="tbl-wrap">
+                  <table>
+                    <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                    <tbody>
+                      {previewRows.map((row, i) => (
+                        <tr key={i}>{previewCols.map((c) => {
+                          const v = row[c];
+                          const empty = v === null || v === undefined || v === "";
+                          return <td key={c}>{empty ? <span className="cell-empty">trống</span> : v}</td>;
+                        })}</tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {profile?.column_types && (
+                  <section className="col-profile">
+                    <h3 className="section-title">Hồ sơ cột</h3>
+                    <div className="col-types-grid">
+                      {Object.entries(profile.column_types).map(([col, dtype]) => {
+                        const missing = profile.missing_values?.[col] ?? 0;
+                        const kind = dtype.startsWith("int") || dtype.startsWith("float") ? "num"
+                          : dtype.startsWith("datetime") ? "date"
+                          : "cat";
+                        return (
+                          <div key={col} className="col-type-row">
+                            <span className="col-name" title={col}>{col}</span>
+                            {missing > 0 && <span className="col-missing">{missing.toLocaleString("vi-VN")} thiếu</span>}
+                            <span className={`col-dtype dtype-${kind}`} title={dtype}>
+                              {kind === "num" ? "số" : kind === "date" ? "ngày" : "phân loại"}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="tbl-foot">
-                      {profile?.rows.toLocaleString()} dòng · {profile?.columns} cột
-                    </div>
-                    {profile?.column_types && (
-                      <details className="col-types-detail">
-                        <summary>Kiểu dữ liệu từng cột</summary>
-                        <div className="col-types-grid">
-                          {Object.entries(profile.column_types).map(([col, dtype]) => {
-                            const missing = profile.missing_values?.[col] ?? 0;
-                            const typeClass = dtype.startsWith("int") || dtype.startsWith("float") ? "dtype-num"
-                              : dtype.startsWith("datetime") ? "dtype-date"
-                              : "dtype-cat";
-                            return (
-                              <div key={col} className="col-type-row">
-                                <span className="col-name">{col}</span>
-                                <span className={`col-dtype ${typeClass}`}>{dtype}</span>
-                                {missing > 0 && <span className="col-missing">{missing} thiếu</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </details>
-                    )}
-                  </>
+                  </section>
                 )}
               </div>
             )}
@@ -1139,25 +1229,15 @@ function App() {
               <div className="panel">
                 {allCharts.length === 0 ? (
                   <div className="empty">
-                    <div className="empty-icon"><LineChart size={40} strokeWidth={1.5} /></div>
+                    <div className="empty-icon"><LineChart size={32} strokeWidth={1.5} /></div>
                     <div className="empty-title">Chưa có biểu đồ</div>
                     <div className="empty-sub">Đặt câu hỏi để agent sinh biểu đồ</div>
                   </div>
                 ) : (
                   <>
-                    <div className="panel-head">Biểu đồ</div>
+                    <h2 className="panel-head">Biểu đồ</h2>
                     <div className="chart-grid">
-                      {allCharts.map((c) => (
-                        <div key={c.chart_id} className="chart-card">
-                          <div className="chart-title">{c.title}</div>
-                          <Plot
-                            data={c.plotly_json.data as never}
-                            layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 48, r: 16, t: 32, b: 64 } }}
-                            useResizeHandler style={{ width: "100%", height: "320px" }}
-                            config={{ displayModeBar: false }}
-                          />
-                        </div>
-                      ))}
+                      {allCharts.map((c) => <ChartCard key={c.chart_id} chart={c} height={320} />)}
                     </div>
                   </>
                 )}
@@ -1166,6 +1246,7 @@ function App() {
           </div>
         </section>
       </main>
+      )}
     </div>
   );
 }
