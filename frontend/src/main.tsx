@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import Plot from "react-plotly.js";
+import {
+  Download, Eye, EyeOff, FileText, FolderOpen, KeyRound, LayoutDashboard,
+  LineChart, Link, MessageSquare, Send, Table2, Upload,
+} from "lucide-react";
 import "./styles.css";
 
 // ── LLM Keys (localStorage) ───────────────────────────────────────────────────
@@ -51,7 +55,7 @@ function SettingsModal({
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-head">
-          <span className="modal-title">⚙️ API Keys</span>
+          <span className="modal-title">API Keys</span>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
 
@@ -64,9 +68,9 @@ function SettingsModal({
               value={keys.provider}
               onChange={(e) => setKeys((k) => ({ ...k, provider: e.target.value }))}
             >
-              <option value="auto">🔄 Auto (fallback chain)</option>
-              <option value="gemini">✨ Google Gemini</option>
-              <option value="anthropic">🤖 Anthropic Claude</option>
+              <option value="auto">Auto (fallback chain)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="anthropic">Anthropic Claude</option>
             </select>
             <div className="settings-hint">
               Auto mode tries Gemini → Anthropic in order.
@@ -102,7 +106,7 @@ function SettingsModal({
                   onClick={() => setReveal((r) => ({ ...r, [id]: !r[id as keyof typeof r] }))}
                   title="Toggle visibility"
                 >
-                  {reveal[id as keyof typeof reveal] ? "🙈" : "👁️"}
+                  {reveal[id as keyof typeof reveal] ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
             </div>
@@ -379,7 +383,7 @@ function DashboardPanel({
           <span className="platform-badge">{data.platform.charAt(0).toUpperCase() + data.platform.slice(1)}</span>
         )}
         <a className="export-xlsx-btn" href={`/api/dashboard/${sessionId}/export.xlsx`} download>
-          ⬇ Xuất Excel
+          <Download size={13} /> Xuất Excel
         </a>
       </div>
 
@@ -397,9 +401,9 @@ function DashboardPanel({
             className={`dash-tab${subTab === t ? " active" : ""}`}
             onClick={() => setSubTab(t)}
           >
-            {t === "kpi" && "📊 KPI"}
-            {t === "products" && "🏆 Top 10"}
-            {t === "trends" && "📈 Xu hướng"}
+            {t === "kpi" && "KPI"}
+            {t === "products" && "Top 10"}
+            {t === "trends" && "Xu hướng"}
           </button>
         ))}
       </div>
@@ -420,7 +424,7 @@ function DashboardPanel({
                   <div className="chart-title">{c.title}</div>
                   <Plot
                     data={c.plotly_json.data as never}
-                    layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 120, r: 16, t: 32, b: 48 } }}
+                    layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 120, r: 16, t: 32, b: 48 } }}
                     useResizeHandler style={{ width: "100%", height: "320px" }}
                     config={{ displayModeBar: false }}
                   />
@@ -429,7 +433,7 @@ function DashboardPanel({
                     href={`/api/dashboard/${sessionId}/export-chart/${c.chart_id}.png`}
                     download
                   >
-                    ⬇ Tải ảnh
+                    Tải ảnh
                   </a>
                 </div>
               ))}
@@ -485,7 +489,7 @@ function DashboardPanel({
               <div className="chart-title">{trendChart.title}</div>
               <Plot
                 data={trendChart.plotly_json.data as never}
-                layout={{ ...(trendChart.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 56, r: 16, t: 32, b: 64 } }}
+                layout={{ ...(trendChart.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 56, r: 16, t: 32, b: 64 } }}
                 useResizeHandler style={{ width: "100%", height: "360px" }}
                 config={{ displayModeBar: false }}
               />
@@ -494,7 +498,7 @@ function DashboardPanel({
                 href={`/api/dashboard/${sessionId}/export-chart/${trendChart.chart_id}.png`}
                 download
               >
-                ⬇ Tải ảnh
+                Tải ảnh
               </a>
             </div>
           ) : (
@@ -528,7 +532,7 @@ function SheetsPanel({
 }) {
   return (
     <div className="sheets-panel">
-      <div className="sheets-label">📑 Sheet / File ({sheets.length})</div>
+      <div className="sheets-label">Sheet / File ({sheets.length})</div>
       <div className="sheets-list">
         {sheets.map((s) => {
           const key = sheetKey(s);
@@ -843,17 +847,16 @@ function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="brand">
-          <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-            <rect width="26" height="26" rx="7" fill="url(#g)"/>
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
             <defs>
-              <linearGradient id="g" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="#7c3aed"/>
-                <stop offset="100%" stopColor="#ec4899"/>
+              <linearGradient id="brand-g" x1="6" y1="6" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#a78bfa"/>
+                <stop offset="100%" stopColor="#5eead4"/>
               </linearGradient>
             </defs>
-            <rect x="5" y="13" width="4" height="8" rx="1" fill="white"/>
-            <rect x="11" y="9" width="4" height="12" rx="1" fill="white"/>
-            <rect x="17" y="5" width="4" height="16" rx="1" fill="white"/>
+            <circle cx="14" cy="14" r="8" fill="url(#brand-g)"/>
+            <ellipse cx="14" cy="14" rx="13" ry="4.5" stroke="#edefff" strokeOpacity=".85" strokeWidth="1.4" transform="rotate(-20 14 14)"/>
+            <circle cx="24" cy="5" r="1.2" fill="#edefff"/>
           </svg>
           <span>DataAgent</span>
         </div>
@@ -863,7 +866,7 @@ function App() {
             {(["file", "url"] as const).map((t) => (
               <button key={t} className={`import-tab${importTab === t ? " active" : ""}`}
                 onClick={() => setImportTab(t)}>
-                {t === "file" && "📁"}{t === "url" && "🔗"}
+                {t === "file" && <FolderOpen size={16} />}{t === "url" && <Link size={16} />}
               </button>
             ))}
           </div>
@@ -878,7 +881,7 @@ function App() {
             >
               <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.xls"
                 style={{ display: "none" }} onChange={(e) => e.target.files && handleFiles(e.target.files)} />
-              <span className="drop-icon">📁</span>
+              <span className="drop-icon"><Upload size={22} /></span>
               <span>{busy && !profile ? "Uploading…" : "Drop CSV / XLSX or click"}</span>
             </div>
           )}
@@ -921,19 +924,19 @@ function App() {
 
         {sessionId && (
           <a className="report-link" href={`/api/session/${sessionId}/data.csv`} download>
-            ⬇ Export CSV
+            <Download size={14} /> Export CSV
           </a>
         )}
         {reportId && (
           <a className="report-link" href={`/api/report/${reportId}`} target="_blank" rel="noreferrer">
-            ⬇ Download Report
+            <FileText size={14} /> Download Report
           </a>
         )}
 
         {/* Settings button — always visible at bottom */}
         <div className="sidebar-footer">
           <button className="btn-settings" onClick={() => setShowSettings(true)}>
-            ⚙️ API Keys
+            <KeyRound size={14} /> API Keys
             <span className={`key-indicator${hasKey ? " active" : ""}`} title={hasKey ? "Keys configured" : "No keys — using server .env"} />
           </button>
         </div>
@@ -951,7 +954,7 @@ function App() {
           <div className="messages">
             {messages.length === 0 && (
               <div className="empty">
-                <div className="empty-icon">💬</div>
+                <div className="empty-icon"><MessageSquare size={40} strokeWidth={1.5} /></div>
                 <div className="empty-title">Hỏi bất kỳ điều gì về dữ liệu</div>
                 <div className="empty-sub">vd. "tổng amount theo category" · "top 5 nhân viên"</div>
               </div>
@@ -995,7 +998,7 @@ function App() {
                             <div className="chart-title">{c.title}</div>
                             <Plot
                               data={c.plotly_json.data as never}
-                              layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 48 } }}
+                              layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 48, r: 16, t: 32, b: 48 } }}
                               useResizeHandler style={{ width: "100%", height: "280px" }}
                               config={{ displayModeBar: false }}
                             />
@@ -1032,7 +1035,7 @@ function App() {
             <div className="input-btns">
               <button className="btn-primary" disabled={!sessionId || !question.trim() || busy}
                 onClick={() => send(question)}>
-                {busy ? "⏳ Đang xử lý…" : "📊 Phân tích"}
+                {busy ? "Đang xử lý…" : <><Send size={15} /> Phân tích</>}
               </button>
             </div>
           </div>
@@ -1043,13 +1046,13 @@ function App() {
           <div className="ws-tabs">
             {dashboardData && dashboardData.kpi_cards?.length > 0 && (
               <button className={`ws-tab${tab === "dashboard" ? " active" : ""}`}
-                onClick={() => setTab("dashboard")}>📊 Dashboard</button>
+                onClick={() => setTab("dashboard")}><LayoutDashboard size={15} /> Dashboard</button>
             )}
             <button className={`ws-tab${tab === "preview" ? " active" : ""}`}
-              onClick={() => setTab("preview")}>🗂️ Dữ liệu</button>
+              onClick={() => setTab("preview")}><Table2 size={15} /> Dữ liệu</button>
             <button className={`ws-tab${tab === "charts" ? " active" : ""}`}
               onClick={() => setTab("charts")}>
-              📈 Biểu đồ
+              <LineChart size={15} /> Biểu đồ
               {allCharts.length > 0 && <span className="badge">{allCharts.length}</span>}
             </button>
           </div>
@@ -1066,7 +1069,7 @@ function App() {
               ) : (
                 <div className="panel">
                   <div className="empty">
-                    <div className="empty-icon">📊</div>
+                    <div className="empty-icon"><LayoutDashboard size={40} strokeWidth={1.5} /></div>
                     <div className="empty-sub">Chưa có dashboard cho dữ liệu hiện tại</div>
                   </div>
                 </div>
@@ -1078,7 +1081,7 @@ function App() {
               <div className="panel">
                 {!sessionId ? (
                   <div className="empty">
-                    <div className="empty-icon">📂</div>
+                    <div className="empty-icon"><FolderOpen size={40} strokeWidth={1.5} /></div>
                     <div className="empty-title">Chưa có dữ liệu</div>
                     <div className="empty-sub">Tải lên CSV hoặc Excel ở thanh bên trái để bắt đầu</div>
                   </div>
@@ -1087,7 +1090,7 @@ function App() {
                     <div className="panel-head">Xem trước <span className="muted">— 10 dòng đầu</span></div>
                     {sheets.length > 1 && (
                       <div className="active-sheet-banner">
-                        📑 Đang phân tích: <b>{activeSheet === "__concat__"
+                        Đang phân tích: <b>{activeSheet === "__concat__"
                           ? `Gộp ${sheets.length} sheet cùng cấu trúc`
                           : (activeSheet?.split("::").pop() ?? activeSheet)}</b>
                         <span className="muted"> · {sheets.length} sheet — chọn sheet khác ở thanh bên trái</span>
@@ -1136,7 +1139,7 @@ function App() {
               <div className="panel">
                 {allCharts.length === 0 ? (
                   <div className="empty">
-                    <div className="empty-icon">📈</div>
+                    <div className="empty-icon"><LineChart size={40} strokeWidth={1.5} /></div>
                     <div className="empty-title">Chưa có biểu đồ</div>
                     <div className="empty-sub">Đặt câu hỏi để agent sinh biểu đồ</div>
                   </div>
@@ -1149,7 +1152,7 @@ function App() {
                           <div className="chart-title">{c.title}</div>
                           <Plot
                             data={c.plotly_json.data as never}
-                            layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#cbd5e1" }, margin: { l: 48, r: 16, t: 32, b: 64 } }}
+                            layout={{ ...(c.plotly_json.layout as object), paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { color: "#a9b0d6" }, margin: { l: 48, r: 16, t: 32, b: 64 } }}
                             useResizeHandler style={{ width: "100%", height: "320px" }}
                             config={{ displayModeBar: false }}
                           />
