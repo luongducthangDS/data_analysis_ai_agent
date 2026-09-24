@@ -50,6 +50,12 @@ app = FastAPI(
     title="Data Analysis AI Agent",
     description="Upload CSV/XLSX files and chat with your data using AI.",
     version="1.0.0",
+    contact={
+        "name": "Luong Duc Thang",
+        "url": "https://github.com/luongducthangDS",
+        "email": "luongducthang289@gmail.com",
+    },
+    license_info={"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
     lifespan=lifespan,
 )
 

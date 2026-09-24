@@ -5,12 +5,12 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Generator
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, create_engine
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/sessions.db")
 
-# Normalize legacy Railway postgres:// → postgresql://
+# Normalize legacy postgres:// (Railway, Supabase) → postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -40,6 +40,9 @@ class SessionModel(Base):
     ecommerce_col_map = Column(JSON, nullable=True, default=None)
     detected_platform = Column(String(32), nullable=True, default=None)
     active_sheet = Column(String(255), nullable=True, default=None)
+    # Full chat history (role/content/source…) — kept in DB so it survives an
+    # ephemeral disk (Render free). chat_history table below is legacy/unused.
+    chat_log = Column(JSON, nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -48,6 +51,11 @@ class SessionModel(Base):
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="ChatHistoryModel.id",
+    )
+    files = relationship(
+        "SessionFileModel",
+        cascade="all, delete-orphan",
+        order_by="SessionFileModel.id",
     )
 
 
@@ -68,10 +76,36 @@ class ChatHistoryModel(Base):
     session = relationship("SessionModel", back_populates="history")
 
 
+class SessionFileModel(Base):
+    """Raw bytes of each uploaded file, so a session can be rebuilt after the
+    local disk is wiped. ponytail: bytea in Postgres — Supabase free DB is
+    500 MB total; move to Supabase Storage if uploads outgrow that."""
+    __tablename__ = "session_files"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(64),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(255), nullable=False)
+    content = Column(LargeBinary, nullable=False)
+
+
+class ReportModel(Base):
+    __tablename__ = "reports"
+
+    report_id = Column(String(64), primary_key=True)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def init_db() -> None:
     """Create all tables if they don't exist. Called once on app startup."""
     Base.metadata.create_all(bind=engine)
     _migrate_sessions_columns()
+    _enable_rls()
 
 
 def _migrate_sessions_columns() -> None:
@@ -84,6 +118,7 @@ def _migrate_sessions_columns() -> None:
         ("ecommerce_col_map", "JSON"),
         ("detected_platform", "VARCHAR(32)"),
         ("active_sheet", "VARCHAR(255)"),
+        ("chat_log", "JSON"),
     ]
     with engine.connect() as conn:
         for col_name, col_type in new_cols:
@@ -91,7 +126,19 @@ def _migrate_sessions_columns() -> None:
                 conn.execute(text(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
             except Exception:
-                pass  # column already exists
+                conn.rollback()  # column already exists; Postgres needs rollback before next stmt
+
+
+def _enable_rls() -> None:
+    """Supabase exposes the public schema through its REST API (anon key).
+    RLS with no policies blocks that path; the backend connects as the
+    table owner, which bypasses RLS."""
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        for table in Base.metadata.tables:
+            conn.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
 
 
 @contextmanager

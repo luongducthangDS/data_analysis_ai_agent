@@ -132,3 +132,13 @@ python tests/eval_calibration.py                                     # heuristic
 - **Auth cơ bản** (`X-API-Key`, mặc định mở cho dev) — chưa có tổ chức / multi‑tenant / RBAC.
 - **Dữ liệu gửi tới LLM bên thứ ba** (Google, OpenRouter) — chưa có tùy chọn model self‑hosted.
 - **Streaming "mỹ phẩm"** — câu trả lời tính xong mới cắt từng từ để hiển thị; chưa phải token‑streaming thật từ LLM.
+
+## Tác giả
+
+**Luong Duc Thang** — [GitHub @luongducthangDS](https://github.com/luongducthangDS) · luongducthang289@gmail.com
+
+Góp ý / báo lỗi: mở [issue](https://github.com/luongducthangDS/data_analysis_ai_agent/issues).
+
+## Giấy phép
+
+[MIT](LICENSE) © 2026 Luong Duc Thang

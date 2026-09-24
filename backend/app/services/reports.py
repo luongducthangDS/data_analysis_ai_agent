@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
 
 from jinja2 import Template
 
+from backend.app.database import ReportModel, db_session
 from backend.app.services.storage import REPORT_DIR
 
 
@@ -45,5 +47,10 @@ def write_markdown_report(answer: str, profile: dict[str, Any], charts: list[dic
     path = REPORT_DIR / f"{report_id}.md"
     rendered = Template(REPORT_TEMPLATE).render(answer=answer, profile=profile, charts=charts)
     path.write_text(rendered, encoding="utf-8")
+    try:
+        with db_session() as db:
+            db.add(ReportModel(report_id=report_id, content=rendered))
+    except Exception as exc:  # disk copy still serves the download
+        logging.getLogger(__name__).warning("report DB write failed (%s): %s", type(exc).__name__, exc)
     return report_id, path
 

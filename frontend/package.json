@@ -1,6 +1,17 @@
 {
   "name": "data-analysis-ai-agent-frontend",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Chat with CSV/Excel files in Vietnamese: validated JSON plans executed deterministically on pandas.",
+  "author": "Luong Duc Thang <luongducthang289@gmail.com> (https://github.com/luongducthangDS)",
+  "license": "MIT",
+  "homepage": "https://github.com/luongducthangDS/data_analysis_ai_agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luongducthangDS/data_analysis_ai_agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/luongducthangDS/data_analysis_ai_agent/issues"
+  },
   "private": true,
   "type": "module",
   "scripts": {

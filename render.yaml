@@ -2,16 +2,13 @@ services:
   - type: web
     name: data-analysis-ai-agent
     runtime: docker
+    plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
-    # Persistent disk — required for uploaded files to survive redeploys.
-    # Render Disk is available on paid plans (Individual $7/mo+).
-    # Remove this block and set DATA_DIR="" if you use the free tier
-    # (uploads will be ephemeral — lost on every redeploy).
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
+    # Free tier: 512 MB RAM, spins down after 15 min idle (~1 min cold start),
+    # no persistent disk — uploads/reports/SQLite (./data) are wiped on every
+    # redeploy or restart. Upgrade to a paid plan + add a `disk:` block
+    # (mountPath: /data) and set DATA_DIR=/data if you need persistence.
     envVars:
       # ── LLM providers ─────────────────────────────────────────────────────
       - key: GEMINI_API_KEY      # required
@@ -20,29 +17,35 @@ services:
         sync: false
 
       # ── Database ────────────────────────────────────────────────────────────
-      # Use Render PostgreSQL add-on or external DB for production.
-      # Leave empty to use SQLite at DATA_DIR/sessions.db (fine for single-instance).
+      # Supabase Postgres — keeps sessions, uploaded files, chat history and
+      # reports across restarts (local disk is only a cache).
+      # Use the *Session pooler* URI (Supabase → Connect), NOT the direct
+      # db.<ref>.supabase.co one: direct is IPv6-only and Render can't reach it.
+      #   postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+      # Not set → SQLite at ./data/sessions.db (wiped on every restart).
       - key: DATABASE_URL
         sync: false
 
-      # ── Storage ─────────────────────────────────────────────────────────────
-      - key: DATA_DIR
-        value: /data
-
       # ── Auth ────────────────────────────────────────────────────────────────
-      # Set ALLOW_NO_AUTH=false and API_KEYS for real multi-user security.
-      # API_KEYS: comma-separated list, e.g. "key1,key2,key3"
+      # API_KEYS: comma-separated list, e.g. "key1,key2,key3".
+      # Left empty → all requests pass (see backend/app/core/auth.py).
       - key: ALLOW_NO_AUTH
         value: "false"
       - key: API_KEYS
         sync: false
 
       # ── CORS ────────────────────────────────────────────────────────────────
-      # Set to your Render app URL to prevent credential leakage.
-      # Example: https://data-analysis-ai-agent.onrender.com
+      # Frontend origin(s), e.g. https://<your-app>.vercel.app. Unset → "*".
       - key: ALLOWED_ORIGINS
         sync: false
 
       # ── Session cleanup ─────────────────────────────────────────────────────
       - key: SESSION_TTL_DAYS
         value: "7"
+      # Max sessions kept in RAM (default 200) — keep low for 512 MB.
+      - key: SESSION_CACHE_SIZE
+        value: "10"
+
+# Keep-alive (free tier sleeps after 15 min idle): point a free cron
+# (cron-job.org / UptimeRobot) at GET https://<app>.onrender.com/api/health
+# every 10 min. 1 service × 24/7 ≈ 744 h ≤ 750 free instance-hours/month.

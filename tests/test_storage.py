@@ -128,6 +128,31 @@ def test_save_persists_history_to_db():
     assert restored.history[1]["content"] == "hi"
 
 
+def test_restore_after_disk_wiped_uses_db_copy():
+    """Ephemeral host (Render free): uploads dir wiped, DB (Supabase) survives."""
+    store = _fresh_store()
+    session = store.create("wiped.csv", make_csv_bytes())
+    session.history.append({"role": "assistant", "content": "ok", "source": "llm"})
+    store.save(session)
+    for f in UPLOAD_DIR.glob(f"{session.session_id}_*"):
+        f.unlink()
+    store._sessions.clear()
+    restored = store.get(session.session_id)
+    assert len(restored.dataframe) == len(session.dataframe)
+    assert restored.history[0]["source"] == "llm"
+    assert (UPLOAD_DIR / f"{session.session_id}_wiped.csv").exists()
+
+
+def test_report_download_falls_back_to_db(client):
+    from backend.app.services.reports import write_markdown_report
+    report_id, path = write_markdown_report("Saved in DB.", {"rows": 1, "columns": 1,
+        "column_types": {}, "missing_values": {}}, [])
+    path.unlink()
+    resp = client.get(f"/api/report/{report_id}")
+    assert resp.status_code == 200
+    assert "Saved in DB." in resp.text
+
+
 def test_save_persists_report_id_to_db():
     store = _fresh_store()
     session = store.create("r.csv", make_csv_bytes())

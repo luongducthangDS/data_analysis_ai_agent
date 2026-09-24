@@ -646,6 +646,24 @@ function App() {
       .catch(() => {});
   }
 
+  // Session routes only 404 when the session is gone — on Render free tier ./data is
+  // wiped on every restart/redeploy. Drop back to the upload screen instead of a dead UI.
+  function expireSession() {
+    alert("Phiên làm việc đã hết hạn (máy chủ vừa khởi động lại). Vui lòng tải lại file.");
+    setSessionId("");
+    setProfile(null);
+    setPreviewCols([]);
+    setPreviewRows([]);
+    setSuggestions([]);
+    setMessages([]);
+    setAllCharts([]);
+    setDashboardData(null);
+    setReportId("");
+    setSheets([]);
+    setRelationships([]);
+    setActiveSheet(null);
+  }
+
   function applyUploadResponse(d: Record<string, unknown>) {
     const sid = d.session_id as string;
     setSessionId(sid);
@@ -704,6 +722,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sheet_name: key }),
       });
+      if (r.status === 404) return expireSession();
       if (!r.ok) throw new Error((await r.json()).detail ?? "Đổi sheet thất bại");
       applyRefresh(await r.json());
       setTab("preview");
@@ -723,6 +742,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, sheet_names: names, join_key: joinKey || undefined }),
       });
+      if (r.status === 404) return expireSession();
       if (!r.ok) throw new Error((await r.json()).detail ?? "Gộp sheet thất bại");
       const resp = await r.json();
       applyRefresh(resp);
@@ -792,6 +812,7 @@ function App() {
         body: JSON.stringify({ session_id: sessionId, question: q }),
       });
 
+      if (resp.status === 404) return expireSession();
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: "Stream failed" }));
         throw new Error(err.detail ?? "Stream failed");

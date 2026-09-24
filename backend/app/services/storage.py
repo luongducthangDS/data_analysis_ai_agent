@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os as _os
 import time
@@ -18,17 +17,20 @@ from backend.app.services.numeric_parse import (
     strip_column_names,
 )
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer, SheetRelationship
-from backend.app.database import init_db, db_session, SessionModel
+from backend.app.database import init_db, db_session, ReportModel, SessionFileModel, SessionModel
 
 
 # DATA_DIR env var lets Railway mount a persistent volume at a custom path.
-# Falls back to "data/" (relative to CWD = /app) for local dev.
+# Falls back to "data/" (relative to CWD = /app) for local dev. Disk is only a
+# cache: uploads, history and reports are also stored in DATABASE_URL, so an
+# ephemeral disk (Render free) can be rebuilt from Postgres/Supabase.
 BASE_DATA_DIR = Path(_os.getenv("DATA_DIR", "data"))
 UPLOAD_DIR = BASE_DATA_DIR / "uploads"
 REPORT_DIR = BASE_DATA_DIR / "reports"
-HISTORY_DIR = BASE_DATA_DIR / "history"
 
-_MAX_CACHE_SIZE = 200
+# In-memory DataFrame LRU. Lower on small instances (Render free = 512 MB);
+# evicted sessions reload from disk/DB on next access (merged sheets are not kept).
+_MAX_CACHE_SIZE = int(_os.getenv("SESSION_CACHE_SIZE", "200"))
 _CACHE_TTL_SECONDS = 24 * 3600
 
 _log = logging.getLogger(__name__)
@@ -71,7 +73,6 @@ class SessionStore:
         self._last_accessed: dict[str, float] = {}
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
         init_db()
 
     def create(self, filename: str, content: bytes, owner_id: str = "") -> DatasetSession:
@@ -147,7 +148,7 @@ class SessionStore:
         )
         self._sessions[session_id] = session
         self._last_accessed[session_id] = time.time()
-        self._insert_session(session)
+        self._insert_session(session, uploads)
         return session
 
     def set_active_sheet(self, session: DatasetSession, sheet_key: str) -> DatasetSession:
@@ -189,10 +190,9 @@ class SessionStore:
         return session
 
     def save(self, session: DatasetSession) -> None:
-        """Persist profile, report_id to DB and history to JSON file."""
+        """Persist profile, report_id and history to DB."""
         self._sessions[session.session_id] = session
         self._last_accessed[session.session_id] = time.time()
-        self._save_history(session.session_id, session.history)
         try:
             with db_session() as db:
                 row = db.get(SessionModel, session.session_id)
@@ -203,6 +203,7 @@ class SessionStore:
                 row.active_sheet = session.active_sheet
                 row.ecommerce_col_map = session.ecommerce_col_map or None
                 row.detected_platform = session.detected_platform
+                row.chat_log = list(session.history)
                 row.updated_at = datetime.utcnow()
         except Exception as exc:
             # Don't crash the API if DB is temporarily unavailable — but make it visible.
@@ -227,14 +228,6 @@ class SessionStore:
             except Exception:
                 pass
 
-        # Remove history file
-        history_path = HISTORY_DIR / f"{session_id}.json"
-        if history_path.exists():
-            try:
-                history_path.unlink()
-            except Exception:
-                pass
-
         # Remove from DB (cascades to chat_history)
         try:
             with db_session() as db:
@@ -248,6 +241,9 @@ class SessionStore:
                                 report_path.unlink()
                             except Exception:
                                 pass
+                        report = db.get(ReportModel, row.report_id)
+                        if report:
+                            db.delete(report)
                     db.delete(row)
         except Exception:
             pass
@@ -296,7 +292,7 @@ class SessionStore:
                 self._sessions.pop(sid, None)
                 self._last_accessed.pop(sid, None)
 
-    def _insert_session(self, session: DatasetSession) -> None:
+    def _insert_session(self, session: DatasetSession, uploads: list[tuple[str, bytes]]) -> None:
         try:
             with db_session() as db:
                 db.add(SessionModel(
@@ -311,25 +307,35 @@ class SessionStore:
                     ecommerce_col_map=session.ecommerce_col_map or None,
                     detected_platform=session.detected_platform,
                     active_sheet=session.active_sheet,
+                    files=[
+                        SessionFileModel(name=Path(filename).name, content=content)
+                        for filename, content in uploads
+                    ],
                 ))
         except Exception as exc:
             _log.warning("session._insert_session DB write failed (%s): %s", type(exc).__name__, exc)
 
     def _restore_from_db(self, session_id: str) -> DatasetSession:
-        """Load a session from DB and reload its DataFrames from disk."""
+        """Load a session from DB and reload its DataFrames from disk,
+        re-materialising files from the DB when the disk was wiped."""
         with db_session() as db:
             row = db.get(SessionModel, session_id)
             if row is None:
                 raise KeyError(f"Unknown session_id: {session_id}")
 
             file_names: list[str] = row.file_names or []
+            stored_files = {f.name: f.content for f in row.files}
             all_sheets: dict[str, pd.DataFrame] = {}
 
             for file_name in file_names:
                 safe_name = Path(file_name).name.replace(" ", "_")
                 file_path = UPLOAD_DIR / f"{session_id}_{safe_name}"
                 if not file_path.exists():
-                    raise KeyError(f"Session file missing from disk: {file_path}")
+                    content = stored_files.get(Path(file_name).name)
+                    if content is None:
+                        raise KeyError(f"Session file missing from disk and DB: {file_path}")
+                    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                    file_path.write_bytes(content)
 
                 suffix = file_path.suffix.lower()
                 if suffix == ".csv":
@@ -345,7 +351,7 @@ class SessionStore:
             analysis_df, active_sheet = self._resolve_active_dataframe(
                 all_sheets, active_sheet=getattr(row, "active_sheet", None)
             )
-            history = self._load_history(session_id)
+            history = list(row.chat_log or [])
             file_path_first = (
                 UPLOAD_DIR / f"{session_id}_{Path(file_names[0]).name.replace(' ', '_')}"
                 if file_names else None
@@ -458,24 +464,6 @@ class SessionStore:
         if suffix in {".xlsx", ".xls"}:
             return SessionStore._normalize_frame(pd.read_excel(file_path))
         raise ValueError("Only CSV, XLSX, and XLS files are supported.")
-
-    @staticmethod
-    def _save_history(session_id: str, history: list[dict[str, str]]) -> None:
-        path = HISTORY_DIR / f"{session_id}.json"
-        try:
-            path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-
-    @staticmethod
-    def _load_history(session_id: str) -> list[dict[str, str]]:
-        path = HISTORY_DIR / f"{session_id}.json"
-        if not path.exists():
-            return []
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return []
 
     @staticmethod
     @staticmethod
