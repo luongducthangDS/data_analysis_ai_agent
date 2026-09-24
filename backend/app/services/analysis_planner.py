@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
+from backend.app.services.ecommerce_semantic import describe_metrics, pick_metric
 from backend.app.services.llm_service import get_llm_client
 from backend.app.services.numeric_parse import parse_numeric_series
 from backend.app.services.security import LITERAL_CONTAINS, sanitize_for_prompt
@@ -297,6 +298,9 @@ def _time_series_plan(dt_col: str, grain: str, metric: str | None, normalized: s
 
 
 def _pick_metric_from_question(normalized: str, df: pd.DataFrame) -> str | None:
+    semantic = pick_metric(normalized, df)
+    if semantic:
+        return semantic
     numeric_cols = _nonzero_numeric_cols(df)
     # Direct column name in question
     for col in numeric_cols:
@@ -605,7 +609,7 @@ Q: "tổng doanh thu theo tên sản phẩm" (doanh thu ở sheet Orders, tên S
 {{"action":"aggregate","source":{{"join":{{"base":"Orders","with":"Items","on":"order_id","how":"left"}}}},"group_by":["product_name"],"metrics":[{{"column":"revenue","aggregation":"sum","label":"Tổng doanh thu"}}],"sort":[{{"column":"Tổng doanh thu","direction":"desc"}}],"limit":20}}
 {multi_sheet_catalog}
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
-{_format_ecommerce_context(ecommerce_col_map)}
+{_format_ecommerce_context(ecommerce_col_map)}{describe_metrics(df)}
 CÂU HỎI HIỆN TẠI:
 {question}""".strip()
 
@@ -895,7 +899,8 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
         op = item["operator"]
         value = item.get("value")
         series = work[col]
-        if pd.api.types.is_datetime64_any_dtype(series):
+        is_dt = pd.api.types.is_datetime64_any_dtype(series)
+        if is_dt:
             series_cmp = pd.to_datetime(series, errors="coerce")
             if isinstance(value, list):
                 value_cmp = [pd.to_datetime(v) for v in value]
@@ -909,17 +914,25 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
             mask = series_cmp == value_cmp
         elif op == "ne":
             mask = series_cmp != value_cmp
+        elif op == "gt" and is_dt and _is_date_only(value):
+            mask = series_cmp >= value_cmp + pd.Timedelta(days=1)
         elif op == "gt":
             mask = series_cmp > value_cmp
         elif op == "gte":
             mask = series_cmp >= value_cmp
         elif op == "lt":
             mask = series_cmp < value_cmp
+        elif op == "lte" and is_dt and _is_date_only(value):
+            mask = series_cmp < value_cmp + pd.Timedelta(days=1)
         elif op == "lte":
             mask = series_cmp <= value_cmp
         elif op == "between":
             lo, hi = value_cmp
-            mask = (series_cmp >= lo) & (series_cmp <= hi)
+            if is_dt and _is_date_only(value[1]):
+                # "2026-05-31" là cả ngày 31/5, không phải 00:00 — cột có giờ sẽ mất ngày cuối kỳ.
+                mask = (series_cmp >= lo) & (series_cmp < hi + pd.Timedelta(days=1))
+            else:
+                mask = (series_cmp >= lo) & (series_cmp <= hi)
         elif op == "in":
             mask = series_cmp.isin(value_cmp if isinstance(value_cmp, list) else [value_cmp])
         elif op == "contains":
@@ -933,6 +946,10 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
             raise ValueError(f"Unsupported filter operator: {op}")
         work = work.loc[mask].copy()
     return work
+
+
+def _is_date_only(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"\s*\d{4}-\d{1,2}-\d{1,2}\s*", value) is not None
 
 
 def _execute_aggregate(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:

@@ -480,7 +480,10 @@ class SessionStore:
         """
         df = strip_column_names(df)
         df = SessionStore._coerce_datetime_columns(df)
-        return coerce_numeric_columns(df)
+        df = coerce_numeric_columns(df)
+        # 4. thêm metric TMĐT tính sẵn (lãi thật, phí sàn) nếu bảng đúng schema đơn hàng.
+        from backend.app.services.ecommerce_semantic import add_metric_columns
+        return add_metric_columns(df)
 
     def _coerce_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
