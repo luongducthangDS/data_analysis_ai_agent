@@ -89,7 +89,7 @@ def bot_info_node(state: AgentState) -> AgentState:
         file_names = ", ".join(session.file_names) if session.file_names else session.filename
         client = get_llm_client()
         prompt = (
-            f"Bạn là Data Analysis AI Agent — trợ lý phân tích dữ liệu.\n"
+            f"Bạn là SellerLens — trợ lý phân tích lãi lỗ cho người bán.\n"
             f"Người dùng vừa upload file: {file_names} ({n_rows:,} dòng, {len(df.columns)} cột).\n"
             f"Các cột: {col_names}.\n"
             f"Họ hỏi: \"{question}\"\n\n"

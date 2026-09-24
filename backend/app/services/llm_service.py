@@ -137,7 +137,7 @@ class OpenRouterLLMClient:
             "Authorization": f"Bearer {self.api_token}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/luongducthangDS/data_analysis_ai_agent",
-            "X-Title": "Data Analysis AI Agent",
+            "X-Title": "SellerLens",
         }
         if not self.api_token:
             raise ValueError("OPENROUTER_API_KEY not set.")

@@ -1,4 +1,4 @@
-"""API integration tests for the Data Analysis AI Agent.
+"""API integration tests for the SellerLens.
 
 Each test targets one behaviour of the FastAPI application. Fixtures are
 provided by conftest.py; heavy LLM calls are short-circuited with mocks.

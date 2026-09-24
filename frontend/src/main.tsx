@@ -951,7 +951,7 @@ function App() {
             <ellipse cx="14" cy="14" rx="13" ry="4.5" stroke="#edefff" strokeOpacity=".85" strokeWidth="1.4" transform="rotate(-20 14 14)"/>
             <circle cx="24" cy="5" r="1.2" fill="#edefff"/>
           </svg>
-          <span>DataAgent</span>
+          <span>SellerLens</span>
         </div>
 
         <section className="rail-section">

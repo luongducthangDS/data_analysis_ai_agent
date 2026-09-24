@@ -75,7 +75,7 @@ _OFF_TOPIC: list[str] = [
     "hỏi về lịch sử", "lịch sử thế giới",
 ]
 
-BOT_INFO_RESPONSE = """Tôi là **Data Analysis AI Agent** 🤖 — trợ lý phân tích dữ liệu thông minh.
+BOT_INFO_RESPONSE = """Tôi là **SellerLens** 🤖 — trợ lý phân tích dữ liệu thông minh.
 
 ## Tôi có thể làm gì?
 - 📊 **Phân tích dữ liệu**: Tổng hợp, so sánh, xếp hạng, lọc theo bất kỳ chiều nào

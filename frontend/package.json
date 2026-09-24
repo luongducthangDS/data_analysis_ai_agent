@@ -1,5 +1,5 @@
 {
-  "name": "data-analysis-ai-agent-frontend",
+  "name": "sellerlens-frontend",
   "version": "1.0.0",
   "description": "Chat with CSV/Excel files in Vietnamese: validated JSON plans executed deterministically on pandas.",
   "author": "Luong Duc Thang <luongducthang289@gmail.com> (https://github.com/luongducthangDS)",
