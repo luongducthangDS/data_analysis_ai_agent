@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # CORS
     allowed_origins: str = "*"  # comma-separated list or "*"
 
+    # Báo cáo Telegram (scripts/send_telegram_report.py)
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     # App
     debug: bool = False
 
