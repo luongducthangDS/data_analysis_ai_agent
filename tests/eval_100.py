@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eval_100.py — Data Analysis AI Agent Evaluation Framework
+eval_100.py — SellerLens Evaluation Framework
 ==========================================================
 100 câu hỏi đánh giá hệ thống trên 6 datasets thực tế.
 
@@ -1036,7 +1036,7 @@ def save_html(results: list[EvalResult], path: Path) -> None:
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<title>Eval Report — Data Analysis AI Agent</title>
+<title>Eval Report — SellerLens</title>
 <style>
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 24px; color: #222; }}
   h1 {{ font-size: 1.6rem; margin-bottom: 4px; }}
@@ -1068,7 +1068,7 @@ def save_html(results: list[EvalResult], path: Path) -> None:
 </style>
 </head>
 <body>
-<h1>📊 Eval Report — Data Analysis AI Agent</h1>
+<h1>📊 Eval Report — SellerLens</h1>
 <div class="meta">Chạy lúc: {run_time} &nbsp;|&nbsp; {total} câu hỏi &nbsp;|&nbsp; 6 datasets</div>
 
 <div class="kpi-grid">
@@ -1408,7 +1408,7 @@ def parse_ids(s: str) -> set[int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Eval 100 câu hỏi cho Data Analysis AI Agent")
+    parser = argparse.ArgumentParser(description="Eval 100 câu hỏi cho SellerLens")
     parser.add_argument("--base-url", default="http://localhost:8000", help="URL server")
     parser.add_argument("--out",      default="results/eval", help="Output prefix (không có extension)")
     parser.add_argument("--ids",      default="",             help="Subset IDs, vd: 1,5,10-20")

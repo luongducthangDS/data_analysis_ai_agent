@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 # ── App factory ───────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="Data Analysis AI Agent",
+    title="SellerLens",
     description="Upload CSV/XLSX files and chat with your data using AI.",
     version="1.0.0",
     contact={
@@ -93,7 +93,7 @@ if _assets_dir.exists():
 def home() -> HTMLResponse:
     index = DIST_DIR / "index.html"
     if index.exists():
-        return HTMLResponse(index.read_text())
+        return HTMLResponse(index.read_text(encoding="utf-8"))
     return HTMLResponse("<h2>Frontend not built. Run: cd frontend && npm run build</h2>", status_code=503)
 
 
@@ -101,5 +101,5 @@ def home() -> HTMLResponse:
 def spa_fallback(full_path: str) -> HTMLResponse:
     index = DIST_DIR / "index.html"
     if index.exists():
-        return HTMLResponse(index.read_text())
+        return HTMLResponse(index.read_text(encoding="utf-8"))
     return HTMLResponse("<h2>Frontend not built.</h2>", status_code=503)

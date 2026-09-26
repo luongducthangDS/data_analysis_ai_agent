@@ -1,4 +1,4 @@
-# Data Analysis AI Agent
+# SellerLens
 
 [![CI](https://github.com/luongducthangDS/data_analysis_ai_agent/actions/workflows/ci.yml/badge.svg)](https://github.com/luongducthangDS/data_analysis_ai_agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
