@@ -26,6 +26,7 @@ class SetActiveSheetRequest(BaseModel):
 def _refresh_payload(session: DatasetSession) -> ActiveSheetResponse:
     """Build the post-switch/merge refresh payload (profile + preview) for the frontend."""
     from backend.app.api.routes.upload import _generate_suggested_queries
+    from backend.app.services.ecommerce_semantic import cogs_gap, seller_notes
     cols, rows = build_preview(session.dataframe)
     return ActiveSheetResponse(
         session_id=session.session_id,
@@ -34,6 +35,8 @@ def _refresh_payload(session: DatasetSession) -> ActiveSheetResponse:
         preview_columns=cols,
         preview_rows=rows,
         suggested_queries=_generate_suggested_queries(session.dataframe, session.profile),
+        data_notes=seller_notes(session.dataframe),
+        cogs_missing=len((cogs_gap(session.dataframe) or {}).get("skus", [])),
     )
 
 _log = logging.getLogger(__name__)

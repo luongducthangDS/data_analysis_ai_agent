@@ -47,12 +47,14 @@ _DATA_SUMMARY: list[str] = [
     "thống kê mô tả", "khám phá dữ liệu", "phân tích tổng quan",
     "phân phối dữ liệu", "cấu trúc dữ liệu", "các cột", "loại dữ liệu",
     "cho tôi biết về dữ liệu", "cho biết về dữ liệu", "giải thích dữ liệu",
+    "file này có gì", "có gì trong file", "file có gì", "đã tải lên những gì",
     # Vietnamese — no diacritics (normalized)
     "tom tat", "mo ta du lieu", "tong quan", "hieu du lieu",
     "muon hieu", "muon biet ve du lieu", "du lieu co gi",
     "bao nhieu cot", "bao nhieu dong", "bao nhieu hang",
     "thong ke mo ta", "kham pha du lieu", "phan tich tong quan",
     "phan phoi du lieu", "cau truc du lieu", "loai du lieu",
+    "file nay co gi", "co gi trong file", "file co gi",
     # English
     "describe", "overview", "summary", "summarize",
     "what columns", "how many rows", "how many columns",
@@ -96,9 +98,9 @@ BOT_INFO_RESPONSE = """Tôi là **SellerLens** 🤖 — trợ lý phân tích d�
 - *"So sánh Q1 và Q2?"*"""
 
 OFF_TOPIC_RESPONSE = (
-    "Tôi là trợ lý **phân tích dữ liệu** và chỉ có thể trả lời câu hỏi "
-    "liên quan đến file dữ liệu bạn đã upload. "
-    "Hãy đặt câu hỏi về dataset của bạn nhé! 📊"
+    "Em chỉ trả lời được câu hỏi về dữ liệu anh/chị đã tải lên "
+    "(doanh thu, phí sàn, lãi, hoàn hàng, quảng cáo…), không tra được thông tin bên ngoài như giá cả thị trường. "
+    "Thử hỏi: \"Vì sao lãi tháng này giảm?\""
 )
 
 
@@ -136,6 +138,8 @@ _OFF_TOPIC_PATTERNS = [
     r"(nên|nen) (mua|đầu tư|dau tu|đi|di |chọn|chon|học|hoc)\b",
     # "cách làm bánh", "cách nấu phở", "chỉ tôi cách …"
     r"(cách|cach|chỉ tôi|chi toi|dạy tôi|day toi|hướng dẫn tôi cách)\s*(làm|lam|nấu|nau|chế biến|che bien)\b",
+    # giá thị trường / tỷ giá: "giá vàng hôm nay", "tỷ giá đô" — không có trong file shop
+    r"(giá|gia) (vàng|vang|xăng|xang|đô|do la|usd|cổ phiếu|co phieu)\b|tỷ giá|ty gia|chứng khoán|chung khoan",
     # kiến thức phổ thông: "thủ đô của", "dân số", "ai là tác giả", "who won"
     r"(thủ đô|thu do|dân số|dan so|diện tích|dien tich|ai là tác giả|ai la tac gia"
     r"|ai là người phát minh|thuyết tương đối|thuyet tuong doi"

@@ -11,12 +11,18 @@ from backend.app.services import usage
 _log = logging.getLogger(__name__)
 
 
+_DETERMINISTIC_TAGS = {"[needs_cogs]", "[data_summary:shop]", "[data_summary:deterministic]", "[bot_info:shop]", "[unclear]", "[no_rows]"}
+
+
 def _compute_source(state: AgentState) -> str:
     intent = state.get("intent") or "data_query"
     if intent == "bot_info":
         return "bot_info"
     if intent == "off_topic":
         return "off_topic"
+    # Câu trả lời soạn tất định (không qua LLM): từ chối thiếu giá vốn, tóm tắt shop, "chưa hiểu câu hỏi".
+    if any(q in _DETERMINISTIC_TAGS for q in state.get("executed_queries") or []):
+        return "deterministic"
     if state.get("llm_synthesis_failed"):
         return "fallback"
     return "llm"

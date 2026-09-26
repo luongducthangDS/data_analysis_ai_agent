@@ -7,6 +7,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from backend.app.agents.state import AgentState
 from backend.app.services import usage
+from backend.app.services.ecommerce_semantic import shop_summary
 from backend.app.services.llm_service import get_llm_client
 from backend.app.services.query_classifier import BOT_INFO_RESPONSE, OFF_TOPIC_RESPONSE
 from backend.app.services.storage import session_store
@@ -66,7 +67,7 @@ def _build_profile_context(profile: dict, df_len: int, df_cols: int) -> tuple[st
         f"{', ' + str(n_date) + ' thời gian' if n_date else ''}).\n"
         f"Missing: {missing_total:,} ô.\n\n"
         f"Cột số:\n" + ("\n".join(num_lines) if num_lines else "  (không có)") + "\n\n"
-        f"Cột danh mục:\n" + ("\n".join(cat_lines) if cat_lines else "  (không có)")
+        "Cột danh mục:\n" + ("\n".join(cat_lines) if cat_lines else "  (không có)")
     )
     stats = {
         "rows": rows, "cols": cols, "n_num": n_num, "n_cat": n_cat,
@@ -87,6 +88,10 @@ def bot_info_node(state: AgentState) -> AgentState:
         col_names = list(df.columns)[:12]
         n_rows = len(df)
         file_names = ", ".join(session.file_names) if session.file_names else session.filename
+        summary = shop_summary(df, session.file_names or [session.filename])
+        if summary:  # shop TMĐT: giới thiệu tất định, không để LLM bịa tính năng
+            intro = "Em là **SellerLens**, trợ lý tính lãi thật cho shop bán trên Shopee/TikTok Shop.\n\n"
+            return {**state, "answer": intro + summary, "charts": [], "executed_queries": ["[bot_info:shop]"]}
         client = get_llm_client()
         prompt = (
             f"Bạn là SellerLens — trợ lý phân tích lãi lỗ cho người bán.\n"
@@ -95,9 +100,8 @@ def bot_info_node(state: AgentState) -> AgentState:
             f"Họ hỏi: \"{question}\"\n\n"
             "Trả lời thân thiện, ngắn gọn bằng tiếng Việt:\n"
             "1. Xác nhận bạn đã thấy dataset (mention tên file + số dòng).\n"
-            "2. Đề xuất 3 câu hỏi cụ thể dựa trên TÊN CỘT thực tế (không bịa).\n"
-            "3. Nhắc chế độ: Phân tích / SQL / Agent.\n"
-            "Không dùng markdown phức tạp."
+            "2. Đề xuất 3 câu hỏi cụ thể dựa trên cột thực tế, viết bằng lời thường (không ghi tên cột snake_case).\n"
+            "Không nhắc tới tính năng nào khác (không có chế độ SQL). Không dùng markdown phức tạp."
         )
         t0 = time.perf_counter()
         answer = _call_llm(client, prompt)
@@ -116,6 +120,11 @@ def off_topic_node(state: AgentState) -> AgentState:
     return {**state, "answer": OFF_TOPIC_RESPONSE, "charts": [], "executed_queries": ["[off_topic]"]}
 
 
+def needs_cogs_node(state: AgentState) -> AgentState:
+    """Hỏi lãi khi chưa có giá vốn → từ chối có hướng dẫn (tất định, không gọi LLM). Câu đã soạn sẵn ở classify."""
+    return {**state, "charts": [], "executed_queries": ["[needs_cogs]"]}
+
+
 def data_summary_node(state: AgentState) -> AgentState:
     """
     Answer overview/summary questions using session.profile directly.
@@ -131,6 +140,10 @@ def data_summary_node(state: AgentState) -> AgentState:
     except Exception as exc:
         _log.warning("data_summary_node: session load failed session=%s (%s)", session_id, exc)
         return {**state, "answer": f"Lỗi phiên: {exc}", "charts": [], "executed_queries": ["[data_summary:error]"]}
+
+    summary = shop_summary(df, session.file_names or [session.filename])
+    if summary:  # shop TMĐT: nói rõ đã ghép giá vốn/quảng cáo chưa — thứ quyết định câu trả lời về lãi có đúng không
+        return {**state, "answer": summary, "charts": [], "executed_queries": ["[data_summary:shop]"]}
 
     context, s = _build_profile_context(profile, len(df), len(df.columns))
 

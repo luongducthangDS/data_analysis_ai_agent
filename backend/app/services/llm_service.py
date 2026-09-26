@@ -75,7 +75,8 @@ class GeminiLLMClient:
             ),
         )
         with usage.track(self.model_name) as call:
-            resp = model.generate_content(prompt)
+            # Không có timeout, SDK từng treo ~130s mà không ném lỗi → failover không kích hoạt.
+            resp = model.generate_content(prompt, request_options={"timeout": 30})
             meta = getattr(resp, "usage_metadata", None)
             if meta is not None:
                 call.prompt_tokens = getattr(meta, "prompt_token_count", 0) or 0

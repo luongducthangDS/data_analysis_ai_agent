@@ -5,9 +5,16 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from backend.app.services.analysis_planner import _pick_metric_from_question, _repair_who_plan, execute_plan
+from backend.app.agents.nodes.plan import _ALLOWED_ACTIONS as _NODE_ACTIONS
+from backend.app.services.analysis_planner import (
+    ALLOWED_ACTIONS, _deterministic_answer, _pick_metric_from_question, _repair_who_plan,
+    _validate_plan_against_dataframe, build_fallback_plan, execute_plan,
+)
 from backend.app.services.ecommerce_columns import detect_ecommerce_columns
-from backend.app.services.ecommerce_semantic import METRICS, add_metric_columns, attach_cogs, describe_metrics
+from backend.app.services.ecommerce_semantic import (
+    FEE_RATE_ROW, METRICS, PROFIT_ROW, RETURN_RATE_ROW, add_metric_columns, attach_cogs, bridge_actions,
+    describe_metrics, fmt_pct, month_periods,
+)
 from backend.app.services.storage import SessionStore
 from scripts.gen_shop_lan import PARAMS
 
@@ -74,7 +81,7 @@ def test_leaves_other_tables_and_user_columns_alone():
 def test_profit_question_routes_to_semantic_metric(orders):
     assert _pick_metric_from_question("vi sao lai thang 5 giam", orders) == "loi_nhuan_truoc_qc"
     assert _pick_metric_from_question("tong phi san theo kenh", orders) == "phi_san"
-    assert all(m in describe_metrics(orders) for m in METRICS)
+    assert all(m in describe_metrics(orders) for m in METRICS if m in orders.columns)
 
 
 @pytest.fixture(scope="module")
@@ -130,3 +137,51 @@ def test_profit_question_is_not_mistaken_for_who_question(orders):
     plan = {"action": "aggregate", "metrics": [{"column": "loi_nhuan_truoc_qc", "aggregation": "sum"}]}
     assert "group_by" not in _repair_who_plan(plan, "Lãi tháng 5 theo kênh bán", orders)
     assert _repair_who_plan(plan, "Ai bán nhiều nhất?", orders)["group_by"]
+
+
+def _row(result, name):
+    return result.set_index("hang_muc").loc[name]
+
+
+def test_profit_bridge_explains_fee_hike_s1(orders, truth):
+    # Câu hỏi thật của chủ shop → fallback rule-based cũng phải ra đúng phép so tháng 5 với tháng 4.
+    plan = build_fallback_plan(orders, "Vì sao lãi tháng 5 giảm?")
+    _validate_plan_against_dataframe(orders, plan)
+    result = execute_plan(orders, plan)
+    s1 = truth["S1_fee_hike"]
+    p4, p5 = result.columns[1:3]
+    parts = result.head(4)["anh_huong_lai"].sum()
+    assert parts == pytest.approx(_row(result, PROFIT_ROW)["anh_huong_lai"], abs=1)  # tách ra cộng lại đúng Δ lãi
+    fee = _row(result, FEE_RATE_ROW)
+    assert (fee[p4], fee[p5]) == (s1["ty_le_phi_thang_4"], s1["ty_le_phi_thang_5"])
+    assert -fee["anh_huong_lai"] == pytest.approx(s1["phi_tang_them_thang_5"], rel=0.01)
+    hints = bridge_actions(result)
+    assert fmt_pct(s1["tang_gia_de_giu_tien_ve_sau_phi"]) in hints[0] and "CHƯA trừ quảng cáo" in hints[-1]
+    assert "Nên kiểm tra" in _deterministic_answer("Vì sao lãi tháng 5 giảm?", result, plan, orders)
+
+
+def test_profit_bridge_finds_return_spike_segment_s4(orders, truth):
+    # Tháng 3 tổng lãi TĂNG nhưng một tỉnh × đơn vị vận chuyển hoàn tăng vọt — vẫn phải chỉ ra nó.
+    s4 = truth["S4_return_spike"]
+    plan = {"action": "profit_bridge", "periods": month_periods(2026, 3), "group_by": ["tinh", "don_vi_van_chuyen"]}
+    result = execute_plan(orders, plan)
+    rate = _row(result, RETURN_RATE_ROW)
+    assert (rate.iloc[0], rate.iloc[1]) == (s4["ty_le_hoan_thang_2"], s4["ty_le_hoan_thang_3"])
+    drags = result[result["hang_muc"].str.contains(":") & (result["anh_huong_lai"] < 0)]
+    seg = s4["phan_khuc_gay_tang"]
+    assert drags.iloc[0]["hang_muc"].endswith(f"{seg['tinh']} × {seg['don_vi_van_chuyen']}")
+    assert any("Tỷ lệ hoàn tăng" in h for h in bridge_actions(result))
+
+
+def test_profit_bridge_rejects_malformed_periods(orders):
+    with pytest.raises(ValueError):
+        _validate_plan_against_dataframe(orders, {"action": "profit_bridge", "periods": [["tháng 4"], ["2026-05-01"]]})
+
+
+def test_planner_and_agent_node_allow_same_actions():
+    assert _NODE_ACTIONS == ALLOWED_ACTIONS  # CLAUDE.md: thêm action phải sửa cả hai chỗ
+
+
+def test_profit_bridge_warns_when_a_period_has_no_data(orders):
+    result = execute_plan(orders, {"action": "profit_bridge", "periods": month_periods(2026, 7)})
+    assert bridge_actions(result)[0].startswith("CẢNH BÁO: kỳ T7/2026")

@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 
 from backend.app.agents.state import AgentState
 from backend.app.agents.nodes.classify import classify_node, route_by_intent
-from backend.app.agents.nodes.respond import bot_info_node, off_topic_node, data_summary_node
+from backend.app.agents.nodes.respond import bot_info_node, off_topic_node, data_summary_node, needs_cogs_node
 from backend.app.agents.nodes.plan import plan_node
 from backend.app.agents.nodes.execute import execute_node
 from backend.app.agents.nodes.synthesize import synthesize_node
@@ -18,6 +18,7 @@ def _build_graph() -> StateGraph:
     g.add_node("bot_info", bot_info_node)
     g.add_node("off_topic", off_topic_node)
     g.add_node("data_summary", data_summary_node)
+    g.add_node("needs_cogs", needs_cogs_node)
     g.add_node("planner", plan_node)
     g.add_node("execute", execute_node)
     g.add_node("synthesize", synthesize_node)
@@ -33,6 +34,7 @@ def _build_graph() -> StateGraph:
             "bot_info":     "bot_info",
             "off_topic":    "off_topic",
             "data_summary": "data_summary",
+            "needs_cogs":   "needs_cogs",
             "data_query":   "planner",
         },
     )
@@ -45,6 +47,7 @@ def _build_graph() -> StateGraph:
     g.add_edge("bot_info", END)
     g.add_edge("off_topic", END)
     g.add_edge("data_summary", END)
+    g.add_edge("needs_cogs", END)
     g.add_edge("synthesize", END)
 
     return g

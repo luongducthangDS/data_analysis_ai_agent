@@ -5,7 +5,6 @@ import logging
 import re
 from typing import Any
 
-import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.app.agents.state import AgentState
@@ -14,7 +13,7 @@ from backend.app.services import usage
 _log = logging.getLogger(__name__)
 
 # Allowed values — replicated here to avoid importing the full planner
-_ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution"}
+_ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution", "profit_bridge"}
 _ALLOWED_AGGREGATIONS = {"sum", "mean", "median", "min", "max", "count", "nunique"}
 _ALLOWED_FILTER_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "contains"}
 
@@ -34,7 +33,7 @@ def plan_node(state: AgentState) -> AgentState:
     from backend.app.services.analysis_planner import (
         build_fallback_plan, _build_planner_prompt, _validate_plan_against_dataframe,
         _repair_plan_for_question, _repair_who_plan, _repair_column_names,
-        _repair_id_to_name_group,
+        _repair_id_to_name_group, _repair_filter_values,
         _build_multi_sheet_catalog,
     )
 
@@ -57,11 +56,21 @@ def plan_node(state: AgentState) -> AgentState:
             raw = _call_llm(client, prompt)
         plan = _extract_json(raw)
         plan = _remap_action_aliases(plan)
+        # LLM hay viết {"sheet": "ads_daily"} ở cấp ngoài thay vì {"source": {"sheet": ...}} → trước đây
+        # bị bỏ qua, plan chạy trên bảng đơn hàng với cột đoán mò và ra 0 dòng.
+        if plan.get("sheet") and not plan.get("source"):
+            plan["source"] = {"sheet": plan.pop("sheet")}
+        # Bảng đơn TMĐT đã ghép sẵn giá vốn + quảng cáo: LLM từng tự join 1 file export với bảng giá vốn
+        # → mất hẳn đơn của sàn còn lại. Bỏ join, giữ bảng đơn đã gộp.
+        if "doanh_thu_thuan" in df.columns and (plan.get("source") or {}).get("join"):
+            _log.info("plan_node: dropped join %r — seller lookups are pre-linked", plan["source"])
+            plan.pop("source")
         # If the plan targets another sheet / a join, validate against THAT frame.
         validate_df = df
         if plan.get("source"):
             validate_df, _ = build_source_frame(session, plan["source"])
         plan = _repair_column_names(plan, validate_df)
+        plan = _repair_filter_values(plan, validate_df)
         plan = _repair_who_plan(plan, question, validate_df)
         plan = _repair_id_to_name_group(plan, question, validate_df)
         plan = _repair_plan_for_question(plan, question)
@@ -99,6 +108,9 @@ _ACTION_ALIASES: dict[str, str] = {
     "histogram":   "distribution",
     "phanphoi":    "distribution",
     "hist":        "distribution",
+    "bridge":      "profit_bridge",
+    "profit_drop": "profit_bridge",
+    "root_cause":  "profit_bridge",
 }
 
 def _remap_action_aliases(plan: dict[str, Any]) -> dict[str, Any]:

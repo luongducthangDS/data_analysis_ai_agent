@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.api.deps import RATE_LIMIT, limiter
 from backend.app.core.auth import get_current_user
 from backend.app.schemas import ImportUrlRequest, UploadResponse
+from backend.app.services.ecommerce_semantic import cogs_gap, seller_notes, seller_questions
 from backend.app.services.profiler import build_profile
 from backend.app.services.storage import session_store
 from backend.app.services.workspace_connectors import fetch_from_url
@@ -16,6 +17,9 @@ router = APIRouter()
 
 
 def _generate_suggested_queries(df, profile: dict) -> list[str]:
+    seller = seller_questions(df)
+    if seller:  # shop TMĐT: câu hỏi của seller, không phải "tổng doanh_thu theo ma_don"
+        return seller
     suggestions: list[str] = []
     numeric_cols = list(profile.get("numeric_summary", {}).keys())
     cat_cols = list(profile.get("categorical_summary", {}).keys())
@@ -99,6 +103,8 @@ def _build_upload_response(uploads: list[tuple[str, bytes]], owner_id: str = "")
         preview_rows=preview_rows,
         suggested_queries=suggested_queries,
         active_sheet=session.active_sheet,
+        data_notes=seller_notes(session.dataframe),
+        cogs_missing=len((cogs_gap(session.dataframe) or {}).get("skus", [])),
     )
 
 
@@ -136,6 +142,18 @@ def upload_dataset(
             raise HTTPException(status_code=413, detail="MVP upload limit is 10MB per file.")
         uploads.append((file.filename, content))
 
+    return _create_session_or_http_error(uploads, _user.get("user_id", ""))
+
+
+SAMPLE_SHOP = Path(__file__).resolve().parents[4] / "data" / "samples" / "shop_lan"
+SAMPLE_FILES = ("export_shopee.csv", "export_tiktok.csv", "products.csv", "ads_daily.csv")
+
+
+@router.post("/api/sample-shop", response_model=UploadResponse)
+@limiter.limit(RATE_LIMIT)
+def load_sample_shop(request: Request, _user: dict = Depends(get_current_user)) -> UploadResponse:
+    """Nút "Dùng thử với shop mẫu": nạp bộ dữ liệu MÔ PHỎNG shop Chị Lan (2 file export + giá vốn + quảng cáo)."""
+    uploads = [(name, (SAMPLE_SHOP / name).read_bytes()) for name in SAMPLE_FILES]
     return _create_session_or_http_error(uploads, _user.get("user_id", ""))
 
 

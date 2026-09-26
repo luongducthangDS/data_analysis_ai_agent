@@ -128,8 +128,8 @@ class SessionStore:
         if not all_sheets:
             raise ValueError("No valid sheets found in upload.")
 
-        from backend.app.services.ecommerce_semantic import attach_cogs
-        all_sheets = attach_cogs(all_sheets)
+        from backend.app.services.ecommerce_semantic import link_sheets
+        all_sheets = link_sheets(all_sheets)
         analysis_df, active_sheet = self._resolve_active_dataframe(all_sheets)
         relationships: list[SheetRelationship] = []
         context = ""
@@ -378,8 +378,8 @@ class SessionStore:
             if not all_sheets:
                 raise KeyError(f"No files could be loaded for session: {session_id}")
 
-            from backend.app.services.ecommerce_semantic import attach_cogs
-            all_sheets = attach_cogs(all_sheets)
+            from backend.app.services.ecommerce_semantic import link_sheets
+            all_sheets = link_sheets(all_sheets)
             analysis_df, active_sheet = self._resolve_active_dataframe(
                 all_sheets, active_sheet=getattr(row, "active_sheet", None)
             )
@@ -453,7 +453,7 @@ class SessionStore:
 
         column_sets = {tuple(df.columns.tolist()) for df in sheets.values()}
         # Đơn TMĐT tách theo sàn + bảng sản phẩm tra cứu → vẫn gộp các bảng đơn cùng schema.
-        orders = {k: df for k, df in sheets.items() if "loi_nhuan_truoc_qc" in df.columns}
+        orders = {k: df for k, df in sheets.items() if "doanh_thu_thuan" in df.columns}
         group = sheets if len(column_sets) == 1 else orders
         if len(group) > 1 and len({frozenset(df.columns) for df in group.values()}) == 1:
             frames = []

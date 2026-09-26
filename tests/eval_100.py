@@ -559,6 +559,10 @@ def _parse_one_number(raw: str) -> float | None:
             return float(raw.replace(".", "").replace(",", "."))
         except ValueError:
             pass
+    # "21,2" / "398,55": phẩy + 1–2 chữ số là thập phân kiểu Việt (agent viết số kiểu Việt từ 2026-09-26).
+    # "1,900" (3 chữ số) vẫn coi là phân cách nghìn kiểu Anh.
+    if re.match(r"^-?\d+,\d{1,2}$", raw):
+        return float(raw.replace(",", "."))
     # Format "0,212" (leading 0, comma as decimal)
     if re.match(r"^-?0,\d+$", raw):
         try:

@@ -261,3 +261,10 @@ def test_hallucinated_vn_number_still_rejected():
     df = pd.DataFrame({"GLID": ["GL001279"], "Debit": [1999.52]})
     answer = "Giao dịch GL001279 có giá trị Debit lớn nhất, đạt 9.876.543,21."
     assert _numbers_grounded(answer, df) is False
+
+
+def test_negative_result_cited_as_decrease_is_grounded():
+    """Bảng có Δ lãi −11.567.470; LLM viết "giảm 11.567.470" (dấu nằm ở chữ "giảm") — không được từ chối."""
+    df = pd.DataFrame({"hang_muc": ["Lãi trước QC"], "anh_huong_lai": [-11567470.0]})
+    assert _numbers_grounded("Lãi tháng 5 giảm 11.567.470 so với tháng 4.", df) is True
+    assert _numbers_grounded("Lãi tháng 5 giảm 21.567.470 so với tháng 4.", df) is False

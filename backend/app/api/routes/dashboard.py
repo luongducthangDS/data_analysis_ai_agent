@@ -18,11 +18,12 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from backend.app.api.deps import get_current_user, get_session
 from backend.app.schemas import ChartSpec, DashboardResponse, KPICard
 from backend.app.services.analysis_planner import execute_plan
+from backend.app.services.ecommerce_semantic import METRICS, cogs_gap, fmt_num, fmt_pct, seller_questions
 from backend.app.services.storage import DatasetSession
 
 _log = logging.getLogger(__name__)
@@ -151,14 +152,14 @@ def _fmt_value(value: float | None, fmt: str) -> str:
         return "—"
     if fmt == "currency_vnd":
         if abs(value) >= 1_000_000_000:
-            return f"{value / 1_000_000_000:,.1f} tỷ ₫"
+            return f"{fmt_num(value / 1_000_000_000, 1)} tỷ ₫"
         if abs(value) >= 1_000_000:
-            return f"{value / 1_000_000:,.1f}M ₫"
-        return f"{value:,.0f} ₫"
+            return f"{fmt_num(value / 1_000_000, 1)} tr ₫"
+        return f"{fmt_num(value)} ₫"
     if fmt == "percent":
-        return f"{value * 100:.1f}%"
+        return fmt_pct(value)
     if fmt == "integer":
-        return f"{int(value):,}"
+        return fmt_num(int(value))
     # number (default)
     if abs(value) >= 1_000_000:
         return f"{value / 1_000_000:,.2f}M"
@@ -218,7 +219,7 @@ def _execute_chart_spec(df: pd.DataFrame, chart: dict) -> dict | None:
             try:
                 dt_range = pd.to_datetime(df[x_col], errors="coerce")
                 span_days = (dt_range.max() - dt_range.min()).days
-                grain = "date" if span_days <= 180 else "month"
+                grain = chart.get("grain") or ("date" if span_days <= 180 else "month")
             except Exception:
                 grain = "month"
             plan: dict[str, Any] = {
@@ -323,6 +324,48 @@ def _fallback_spec(df: pd.DataFrame, profile: dict[str, Any]) -> dict:
     }
 
 
+_TOP_LABELS = {"loi_nhuan_rong": "Lãi ròng sau QC", "loi_nhuan_truoc_qc": "Lãi trước QC",
+               "doanh_thu_thuan": "Doanh thu thuần"}
+
+
+def _seller_spec(df: pd.DataFrame) -> dict:
+    """Shop TMĐT: KPI/biểu đồ cố định theo lời hứa "lãi thật" — không để LLM chọn cột (từng chọn doanh thu)."""
+    profit = next((c for c in ("loi_nhuan_rong", "loi_nhuan_truoc_qc") if c in df.columns), "doanh_thu_thuan")
+    label = {"loi_nhuan_rong": "Lãi ròng sau QC", "loi_nhuan_truoc_qc": "Lãi trước QC"}.get(profit, "Doanh thu thuần")
+    return {
+        "domain": "Shop TMĐT",
+        "chart_specs": [
+            {"title": f"{label} theo tháng", "chart_type": "line", "x_col": "ngay_dat", "y_col": profit,
+             "aggregation": "sum", "is_time_series": True, "grain": "month"},
+            {"title": f"{label} theo kênh", "chart_type": "bar", "x_col": "kenh", "y_col": profit,
+             "aggregation": "sum", "is_time_series": False},
+        ],
+        "top_dimension": "sku" if "sku" in df.columns else None,
+        "top_metric": profit,
+        "suggested_queries": seller_questions(df)[:3],
+    }
+
+
+def _seller_kpis(df: pd.DataFrame) -> list[KPICard]:
+    rev, fee = float(df["doanh_thu_thuan"].sum()), float(df["phi_san"].sum())
+    cards = [
+        KPICard(label="Doanh thu thuần", value=_fmt_value(rev, "currency_vnd"), formula=METRICS["doanh_thu_thuan"]),
+        KPICard(label="Phí sàn", value=f"{_fmt_value(fee, 'currency_vnd')} · {fmt_pct(fee / rev) if rev else '—'}",
+                formula="Tổng phí sàn và % trên doanh thu thuần"),
+    ]
+    if "loi_nhuan_truoc_qc" in df.columns:
+        cards.append(KPICard(label="Lãi trước QC", value=_fmt_value(float(df["loi_nhuan_truoc_qc"].sum()), "currency_vnd"),
+                             formula=METRICS["loi_nhuan_truoc_qc"], is_alert=bool(cogs_gap(df))))
+    else:
+        cards.append(KPICard(label="Lãi", value="Chưa có giá vốn", is_alert=True,
+                             formula="Tải bảng sku, gia_von để tính lãi"))
+    if "loi_nhuan_rong" in df.columns:
+        cards.append(KPICard(label="Lãi ròng sau QC", value=_fmt_value(float(df["loi_nhuan_rong"].sum()), "currency_vnd"),
+                             formula=METRICS["loi_nhuan_rong"]))
+    cards.append(KPICard(label="Tỷ lệ hoàn", value=fmt_pct(float(df["la_don_hoan"].mean())), formula=METRICS["la_don_hoan"]))
+    return cards
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoint
 # ─────────────────────────────────────────────────────────────────────────────
@@ -355,15 +398,16 @@ def get_dashboard(
     col_map = _session.ecommerce_col_map or {}
 
     # ── Generate spec via LLM ─────────────────────────────────────────────────
-    spec: dict = {}
+    seller = "doanh_thu_thuan" in df.columns
+    spec: dict = _seller_spec(df) if seller else {}
     t0 = time.perf_counter()
     try:
-        prompt = _build_llm_prompt(df, profile, filename, col_map)
-        spec = _call_llm_for_spec(prompt)
-        _log.info(
-            "dashboard: LLM spec done in %.2fs domain=%r session=%s",
-            time.perf_counter() - t0, spec.get("domain"), session_id,
-        )
+        if not seller:
+            spec = _call_llm_for_spec(_build_llm_prompt(df, profile, filename, col_map))
+            _log.info(
+                "dashboard: LLM spec done in %.2fs domain=%r session=%s",
+                time.perf_counter() - t0, spec.get("domain"), session_id,
+            )
     except Exception as exc:
         _log.warning("dashboard: LLM spec failed (%.2fs): %s — using fallback", time.perf_counter() - t0, exc)
         spec = _fallback_spec(df, profile)
@@ -371,7 +415,7 @@ def get_dashboard(
     domain = spec.get("domain", "")
 
     # ── Execute KPI specs ─────────────────────────────────────────────────────
-    kpi_cards: list[KPICard] = []
+    kpi_cards: list[KPICard] = _seller_kpis(df) if seller else []
     for kpi in spec.get("kpi_specs", []):
         card = _execute_kpi_spec(df, kpi)
         if card:
@@ -388,10 +432,11 @@ def get_dashboard(
 
     # ── Build top_products-equivalent table (generic top dimension breakdown) ─
     top_rows: list[dict] = []
+    top_label: str | None = None
     top_dim = spec.get("top_dimension")
     num_cols = list(profile.get("numeric_summary", {}).keys())
     if top_dim and top_dim in df.columns and num_cols:
-        metric_col = num_cols[0]
+        metric_col = spec.get("top_metric") or num_cols[0]
         try:
             grp = (
                 df.groupby(top_dim, dropna=False)[metric_col]
@@ -402,15 +447,18 @@ def get_dashboard(
             )
             grp["rank"] = range(1, len(grp) + 1)
             top_rows = grp.rename(columns={top_dim: "name", metric_col: "value"}).to_dict("records")
+            top_label = _TOP_LABELS.get(metric_col, metric_col)
         except Exception:
-            pass
+            _log.warning("dashboard: top-10 by %r failed session=%s", top_dim, session_id, exc_info=True)
 
     suggested = spec.get("suggested_queries", [])
 
     # ── Cache result ──────────────────────────────────────────────────────────
     response = DashboardResponse(
         session_id=session_id,
-        platform=_session.detected_platform or domain,
+        # Nhiều kênh → ghi đủ các kênh (trước đây hiện "shopee" cho dữ liệu Shopee + TikTok).
+        platform=(" + ".join(map(str, df["kenh"].dropna().unique())) if seller and "kenh" in df.columns
+                  else _session.detected_platform or domain),
         kpi_cards=kpi_cards,
         charts=charts,
         top_products=top_rows,
@@ -418,6 +466,7 @@ def get_dashboard(
         unmapped_cols=[],
         is_ecommerce=True,  # always show dashboard for any dataset
         suggested_queries=suggested,
+        top_label=top_label,
     )
     _session._dashboard_cache = response        # type: ignore[attr-defined]
     _session._dashboard_charts_raw = charts_raw  # type: ignore[attr-defined]

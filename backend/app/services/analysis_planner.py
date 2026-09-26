@@ -12,7 +12,9 @@ import pandas as pd
 import plotly.express as px
 
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
-from backend.app.services.ecommerce_semantic import describe_metrics, pick_metric
+from backend.app.services.ecommerce_semantic import (
+    BRIDGE_REQUIRED, bridge_actions, describe_metrics, fmt_num, fmt_pct, month_periods, pick_metric, profit_bridge,
+)
 from backend.app.services.llm_service import get_llm_client
 from backend.app.services.numeric_parse import parse_numeric_series
 from backend.app.services.security import LITERAL_CONTAINS, sanitize_for_prompt
@@ -28,7 +30,7 @@ class PlannerResult:
     plan: dict[str, Any] = field(default_factory=dict)
 
 
-ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution"}
+ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution", "profit_bridge"}
 ALLOWED_AGGREGATIONS = {"sum", "mean", "median", "min", "max", "count", "nunique"}
 ALLOWED_DERIVED_OPS = {
     "multiply",
@@ -72,6 +74,9 @@ def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     work = _apply_filters(work, plan.get("filters", []))
 
     action = plan["action"]
+    if work.empty and action in {"aggregate", "compare_metrics", "time_series"}:
+        # sum() trên 0 dòng = 0 → từng thành "lãi tháng 7 là 0 đ" khi dữ liệu chỉ tới tháng 6.
+        return pd.DataFrame()
     if action == "profile":
         return _profile_frame(work)
     if action == "aggregate":
@@ -82,12 +87,18 @@ def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
         return _execute_time_series(work, plan)
     if action == "distribution":
         return _execute_distribution(work, plan)
+    if action == "profit_bridge":
+        return profit_bridge(work, plan)
     raise ValueError(f"Unsupported action: {action}")
 
 
 def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
     """Rule-based fallback when LLM planning fails. Covers common DA/accounting patterns."""
     normalized = _normalize(question)
+
+    bridge = _profit_bridge_fallback(df, normalized)
+    if bridge:
+        return bridge
 
     # Insight / overview / profile questions → use profile action immediately
     _INSIGHT_KEYWORDS = (
@@ -237,15 +248,39 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
         }
 
     # ── 9. Last resort ─────────────────────────────────────────────────────────
+    # `_generic`: không khớp luật nào → kết quả không trả lời câu hỏi; synthesize sẽ nói "chưa hiểu"
+    # thay vì để LLM dựng chuyện quanh 4 con số tổng (từng bịa "đơn trang sức" cho câu "giá vàng hôm nay").
     if numeric_cols:
         return {
             "action": "compare_metrics",
             "metrics": [{"column": c, "aggregation": "sum", "label": c} for c in numeric_cols[:4]],
+            "_generic": True,
         }
-    return {"action": "profile"}
+    return {"action": "profile", "_generic": True}
 
 
 # ── Fallback helpers ───────────────────────────────────────────────────────────
+
+_PROFIT_WORD = re.compile(r"\b(?:lai|loi nhuan|profit)\b")
+_CHANGE_WORD = re.compile(r"\b(?:giam|tang|sut|tut|vi sao|tai sao|nguyen nhan|so voi|why)\b")
+
+
+def _profit_bridge_fallback(df: pd.DataFrame, normalized: str) -> dict[str, Any] | None:
+    """"Vì sao lãi tháng 5 giảm" → profit_bridge tháng 5 so với tháng 4 (hoặc tháng thứ hai được nhắc tới)."""
+    if not set(BRIDGE_REQUIRED) <= set(df.columns) or "ngay_dat" not in df.columns:
+        return None
+    if not (_PROFIT_WORD.search(normalized) and _CHANGE_WORD.search(normalized)):
+        return None
+    plan: dict[str, Any] = {"action": "profit_bridge", "time_column": "ngay_dat"}
+    months = [int(m) for m in re.findall(r"\bthang (\d{1,2})\b", normalized) if 1 <= int(m) <= 12]
+    last = pd.to_datetime(df["ngay_dat"], errors="coerce").max()
+    if months:
+        plan["periods"] = month_periods(last.year, months[0], months[1] if len(months) > 1 else None)
+    elif re.search(r"\bthang truoc\b", normalized) and not re.search(r"\bthang nay\b", normalized):
+        prev = last.to_period("M") - 1  # "tháng trước" = tháng liền trước tháng cuối trong dữ liệu
+        plan["periods"] = month_periods(prev.year, prev.month)
+    return plan
+
 
 def _detect_numeric_threshold(normalized: str) -> tuple[str, float] | None:
     """
@@ -607,9 +642,25 @@ Q: "tổng doanh thu theo tên sản phẩm" (doanh thu ở sheet Orders, tên S
 {{"action":"aggregate","source":{{"join":{{"base":"Orders","with":"Items","on":"order_id","how":"left"}}}},"group_by":["product_name"],"metrics":[{{"column":"revenue","aggregation":"sum","label":"Tổng doanh thu"}}],"sort":[{{"column":"Tổng doanh thu","direction":"desc"}}],"limit":20}}
 {multi_sheet_catalog}
 LỊCH SỬ HỘI THOẠI GẦN ĐÂY:{_format_history(history)}
-{_format_ecommerce_context(ecommerce_col_map)}{describe_metrics(df)}
+{_format_ecommerce_context(ecommerce_col_map)}{describe_metrics(df)}{_date_context(df)}
 CÂU HỎI HIỆN TẠI:
 {question}""".strip()
+
+
+def _date_context(df: pd.DataFrame) -> str:
+    """Khoảng ngày của dữ liệu để LLM hiểu "tháng này/tháng trước" (trước đây nó bám ví dụ "tháng 5")."""
+    date_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns
+    if not len(date_cols):
+        return ""
+    col = date_cols[0]
+    dates = pd.to_datetime(df[col], errors="coerce").dropna()
+    if dates.empty:
+        return ""
+    last = dates.max()
+    prev = (last.to_period("M") - 1).to_timestamp()
+    return (f"\nTHỜI GIAN: cột {col} có dữ liệu từ {dates.min():%Y-%m-%d} đến {last:%Y-%m-%d}. "
+            f"\"tháng này\"/\"gần nhất\" = tháng {last:%m/%Y}; \"tháng trước\" = tháng {prev:%m/%Y}. "
+            "Không đổi kỳ người dùng hỏi kể cả khi nằm ngoài khoảng này.\n")
 
 
 # Khớp NGUYÊN TỪ: kiểu chuỗi con "ai " từng khớp nhầm "lãi tháng 5" (bỏ dấu = "lai thang").
@@ -626,7 +677,8 @@ def _repair_who_plan(plan: dict[str, Any], question: str, df: pd.DataFrame) -> d
     """If question is a 'who' question but plan has no group_by, inject entity column."""
     normalized = _normalize(question)
     is_who = _is_who_question(normalized)
-    if not is_who or plan.get("group_by"):
+    # profit_bridge tự tìm SKU/kênh gây giảm; ép group_by tên + limit 1 sẽ chỉ còn một nhóm.
+    if not is_who or plan.get("group_by") or plan.get("action") == "profit_bridge":
         return plan
     cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
     entity_col = _find_name_col(df, cat_cols)
@@ -743,6 +795,42 @@ def _repair_column_names(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, An
     return repaired
 
 
+def _repair_filter_values(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, Any]:
+    """Giá trị filter LLM viết lệch chữ hoa/viết tắt → giá trị thật trong cột ("Tiktok" → "TikTok Shop").
+
+    Trước đây filter kenh = "Tiktok" ra 0 dòng và câu trả lời thành "không có dữ liệu".
+    Chỉ đổi khi khớp được DUY NHẤT một giá trị; mơ hồ thì giữ nguyên.
+    """
+    filters = plan.get("filters") or []
+    if not filters:
+        return plan
+    repaired = json.loads(json.dumps(plan, default=str))
+
+    def _fix(col: str, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        actual = [str(v) for v in df[col].dropna().unique()[:500]]
+        if value in actual:
+            return value
+        n = _normalize(value)
+        exact = [a for a in actual if _normalize(a) == n]
+        partial = exact or [a for a in actual if n and (n in _normalize(a) or _normalize(a) in n)]
+        if len(partial) == 1:
+            _log.info("_repair_filter_values: %s %r → %r", col, value, partial[0])
+            return partial[0]
+        return value
+
+    for item in repaired.get("filters") or []:
+        col = item.get("column")
+        if item.get("operator") not in {"eq", "ne", "in"} or col not in df.columns:
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]) or pd.api.types.is_datetime64_any_dtype(df[col]):
+            continue
+        value = item.get("value")
+        item["value"] = [_fix(col, v) for v in value] if isinstance(value, list) else _fix(col, value)
+    return repaired
+
+
 # Câu hỏi nhắm tới CẢ tập dữ liệu, không phải từng nhóm.
 _WHOLE_DATASET_MARKERS = (
     "toan bo", "toan he thong", "tong cong", "tat ca", "ca tap",
@@ -786,6 +874,8 @@ def _repair_whole_dataset_aggregate(plan: dict[str, Any], question: str) -> dict
 
 
 def _repair_plan_for_question(plan: dict[str, Any], question: str) -> dict[str, Any]:
+    if plan.get("action") == "profit_bridge":
+        return plan  # kỳ so sánh nằm trong periods; filter quý chèn thêm sẽ cắt mất một kỳ
     repaired = _repair_whole_dataset_aggregate(dict(plan), question)
     normalized = _normalize(question)
     quarters = _mentioned_quarters(normalized)
@@ -850,10 +940,26 @@ def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> 
         _require_column(known, plan["time_column"])
     if plan.get("action") == "distribution":
         _require_column(known, plan.get("column"))
+    if plan.get("action") == "profit_bridge":
+        for col in (*BRIDGE_REQUIRED, plan.get("time_column") or "ngay_dat"):
+            _require_column(known, col)
+        periods = plan.get("periods")
+        if periods is not None and not (
+            isinstance(periods, list) and len(periods) == 2
+            and all(isinstance(p, list) and len(p) == 2 and all(_is_date_only(d) for d in p) for p in periods)
+        ):
+            raise ValueError("profit_bridge.periods phải là [[từ, đến], [từ, đến]] dạng YYYY-MM-DD.")
     for metric in plan.get("metrics", []) or []:
         _require_column(known, metric.get("column"))
         if metric.get("aggregation", "sum") not in ALLOWED_AGGREGATIONS:
             raise ValueError(f"Unsupported aggregation: {metric.get('aggregation')}")
+    labels = {_metric_label(m) for m in plan.get("metrics", []) or []}
+    for ratio in plan.get("ratios", []) or []:
+        if not isinstance(ratio, dict) or not ratio.get("label"):
+            raise ValueError("ratio cần label, numerator, denominator.")
+        for key in ("numerator", "denominator"):
+            if ratio.get(key) not in labels:
+                raise ValueError(f"ratio.{key} phải là label của một metric trong plan: {ratio.get(key)}")
 
 
 def _validate_derived_sources(known: set[str], derived: dict[str, Any]) -> None:
@@ -975,17 +1081,25 @@ def _execute_aggregate(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     else:
         rows = {}
         for metric in metrics:
-            label = metric.get("label") or f"{metric.get('aggregation', 'sum')}_{metric['column']}"
-            rows[label] = _aggregate_series(df[metric["column"]], metric.get("aggregation", "sum"))
+            rows[_metric_label(metric)] = _aggregate_series(df[metric["column"]], metric.get("aggregation", "sum"))
         result = pd.DataFrame([rows])
 
+    for ratio in plan.get("ratios", []) or []:
+        # Tỷ số của 2 TỔNG (vd phí sàn / doanh thu thuần), không phải trung bình tỷ lệ từng đơn.
+        den = pd.to_numeric(result[ratio["denominator"]], errors="coerce")
+        result[ratio["label"]] = (pd.to_numeric(result[ratio["numerator"]], errors="coerce") / den.where(den != 0)).round(4)
     return _sort_and_limit(result, plan)
+
+
+def _metric_label(metric: dict[str, Any]) -> str:
+    return metric.get("label") or f"{metric.get('aggregation', 'sum')}_{metric.get('column')}"
+
 
 
 def _execute_compare_metrics(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     rows = []
     group_by = plan.get("group_by", []) or []
-    if group_by:
+    if group_by or plan.get("ratios"):
         return _execute_aggregate(df, plan)
     for metric in plan.get("metrics", []) or []:
         label = metric.get("label") or metric["column"]
@@ -1128,6 +1242,13 @@ def _build_charts_from_result(result: pd.DataFrame, plan: dict[str, Any]) -> lis
         fig.update_layout(bargap=0.02)  # adjacent bars → histogram look
         return [_chart("histogram", title, fig, x=str(x), y=str(y))]
 
+    if action == "profit_bridge":
+        # 4 hạng mục + dòng Lãi; tỷ lệ và nhóm driver đã nằm trong bảng/câu trả lời.
+        impact = result.head(5)
+        fig = px.bar(impact, x="hang_muc", y="anh_huong_lai", title="Ảnh hưởng tới lãi", text="anh_huong_lai")
+        fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+        return [_chart("bar", "Ảnh hưởng tới lãi", fig, x="hang_muc", y="anh_huong_lai")]
+
     # Meaningfulness gate: a single value / single row produces a 1-bar chart
     # that adds nothing. Only chart when there are ≥2 groups to compare.
     if len(result) < 2 or len(result.columns) < 2:
@@ -1154,7 +1275,6 @@ def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any]
         client = get_llm_client()
         rows_text = result.head(15).to_string(index=False, max_colwidth=50)
         currency_note = _build_currency_warning(source_df, plan) or ""
-        col_names = list(source_df.columns) if source_df is not None else []
         prompt = f"""Bạn là senior data analyst. Dùng kết quả phân tích sau để trả lời câu hỏi của người dùng.
 
 Câu hỏi: {question}
@@ -1225,6 +1345,9 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
                 lines.append(f"{index}. {row['khoang_gia_tri']}: {_format_cell(row['so_luong'])} bản ghi")
         return "\n".join(lines)
 
+    if plan.get("action") == "profit_bridge":
+        return "\n".join(lines + _bridge_brief(result))
+
     if plan.get("action") == "compare_metrics" and set(result.columns) >= {"metric", "value"}:
         lines.append("### So sánh chỉ số")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
@@ -1240,6 +1363,10 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
         return "\n".join(lines)
 
     numeric_cols = result.select_dtypes(include="number").columns.tolist()
+    if len(numeric_cols) > 1:
+        # Nhiều chỉ số (vd doanh thu + lãi): xếp hạng theo cột đầu sẽ giấu mất cột lãi → in cả bảng.
+        lines.append(_frame_to_markdown(result))
+        return "\n".join(lines)
     if len(result.columns) >= 2 and numeric_cols:
         dim = result.columns[0]
         metric = numeric_cols[0]
@@ -1247,7 +1374,7 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
         lines.append("### Xếp hạng / kết quả")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
             val = row[metric]
-            pct = f" ({float(val)/total*100:.1f}%)" if total and val is not None else ""
+            pct = f" ({fmt_pct(float(val) / total)})" if total and val is not None else ""
             lines.append(f"{index}. {row[dim]}: {_format_cell(val)}{pct}")
         if len(result) > 1:
             lines.append(f"\nTổng: {_format_cell(total)}")
@@ -1255,6 +1382,22 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
 
     lines.append(_frame_to_markdown(result))
     return "\n".join(lines)
+
+
+def _bridge_brief(result: pd.DataFrame) -> list[str]:
+    p0, p1 = result.columns[1], result.columns[2]
+    by_name = result.set_index("hang_muc")
+    before, after, delta = by_name.loc["Lãi trước QC", [p0, p1, "anh_huong_lai"]]
+    lines = [f"### Lãi trước QC {'giảm' if delta < 0 else 'tăng'} {_format_cell(abs(delta))} "
+             f"({p0}: {_format_cell(before)} → {p1}: {_format_cell(after)})", "", "Ảnh hưởng theo hạng mục:"]
+    for name in ("Doanh thu thuần", "Phí sàn", "Giá vốn", "Chi phí hoàn hàng"):
+        lines.append(f"- {name}: {_format_cell(by_name.loc[name, 'anh_huong_lai'])}")
+    drivers = result[result["hang_muc"].str.contains(":", regex=False)]
+    if not drivers.empty:
+        lines += ["", "Nhóm kéo lãi đi nhiều nhất:"]
+        lines += [f"- {r.hang_muc}: {_format_cell(r.anh_huong_lai)}" for r in drivers.itertuples()]
+    lines += ["", "### Nên kiểm tra"] + [f"- {a}" for a in bridge_actions(result)]
+    return lines
 
 
 def _build_currency_warning(df: pd.DataFrame | None, plan: dict[str, Any]) -> str | None:
@@ -1294,10 +1437,10 @@ def _format_cell(value: Any) -> str:
         return ""
     if isinstance(value, float):
         if value.is_integer():
-            return f"{int(value):,}"
-        return f"{value:,.4f}"
+            return fmt_num(value)
+        return fmt_num(value, 4)
     if isinstance(value, int):
-        return f"{value:,}"
+        return fmt_num(value)
     return str(value).replace("|", "\\|")
 
 

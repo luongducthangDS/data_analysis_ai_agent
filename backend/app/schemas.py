@@ -35,6 +35,8 @@ class UploadResponse(BaseModel):
     preview_rows: list[dict[str, Any]] = Field(default_factory=list, description="First 10 rows for table preview")
     suggested_queries: list[str] = Field(default_factory=list, description="Auto-generated example queries")
     active_sheet: str | None = Field(default=None, description="Sheet key currently driving analysis ('__concat__' = merged same-schema sheets)")
+    data_notes: list[str] = Field(default_factory=list, description="Seller data gaps (missing COGS / ads) shown right after upload")
+    cogs_missing: int = Field(default=0, description="Number of SKUs without cost of goods — >0 enables the COGS template download")
 
 
 class ActiveSheetResponse(BaseModel):
@@ -44,25 +46,8 @@ class ActiveSheetResponse(BaseModel):
     preview_columns: list[str] = Field(default_factory=list)
     preview_rows: list[dict[str, Any]] = Field(default_factory=list)
     suggested_queries: list[str] = Field(default_factory=list)
-
-
-class AnalyzeRequest(BaseModel):
-    session_id: str
-    question: str | None = Field(
-        default=None,
-        description="Optional business question. If omitted, the system performs automatic analysis.",
-    )
-
-
-class AnalyzeResponse(BaseModel):
-    session_id: str
-    answer: str
-    profile: DatasetProfile
-    charts: list[ChartSpec]
-    report_id: str
-    executed_queries: list[str] = Field(default_factory=list)
-    guardrails: list[str] = Field(default_factory=list)
-    source: str = "llm"  # "llm" | "fallback" | "bot_info" | "off_topic"
+    data_notes: list[str] = Field(default_factory=list)
+    cogs_missing: int = 0
 
 
 class ChatRequest(BaseModel):
@@ -76,7 +61,7 @@ class ChatResponse(BaseModel):
     charts: list[ChartSpec] = Field(default_factory=list)
     executed_queries: list[str] = Field(default_factory=list)
     query_type: str = "data_query"  # "data_query" | "bot_info" | "off_topic"
-    source: str = "llm"  # "llm" | "fallback" | "bot_info" | "off_topic"
+    source: str = "llm"  # "llm" | "fallback" | "deterministic" | "bot_info" | "off_topic"
     # Token / chi phí / số lần gọi LLM cho lượt hỏi này. Rỗng khi không gọi LLM
     # (bot_info, off_topic, hoặc toàn bộ rơi xuống rule-based).
     usage: dict = Field(default_factory=dict)
@@ -127,22 +112,6 @@ class ImportUrlRequest(BaseModel):
     url: str
 
 
-class AgentStepSchema(BaseModel):
-    step: int
-    tool_name: str
-    arguments: dict[str, Any]
-    result_summary: str
-    charts: list[ChartSpec] = Field(default_factory=list)
-
-
-class AgentChatResponse(BaseModel):
-    session_id: str
-    answer: str
-    charts: list[ChartSpec] = Field(default_factory=list)
-    agent_steps: list[AgentStepSchema] = Field(default_factory=list)
-    executed_queries: list[str] = Field(default_factory=list)
-
-
 # ── E-Commerce Dashboard ──────────────────────────────────────────────────────
 
 class KPICard(BaseModel):
@@ -164,3 +133,4 @@ class DashboardResponse(BaseModel):
     unmapped_cols: list[str] = Field(default_factory=list)
     is_ecommerce: bool = False
     suggested_queries: list[str] = Field(default_factory=list)
+    top_label: str | None = Field(default=None, description="Metric name shown for the Top 10 table")
