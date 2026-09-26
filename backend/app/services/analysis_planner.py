@@ -5,7 +5,6 @@ import logging
 import math
 import re
 import uuid
-from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
@@ -15,19 +14,10 @@ from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.ecommerce_semantic import (
     BRIDGE_REQUIRED, bridge_actions, describe_metrics, fmt_num, fmt_pct, month_periods, pick_metric, profit_bridge,
 )
-from backend.app.services.llm_service import get_llm_client
 from backend.app.services.numeric_parse import parse_numeric_series
 from backend.app.services.security import LITERAL_CONTAINS, sanitize_for_prompt
 
 _log = logging.getLogger(__name__)
-
-
-@dataclass
-class PlannerResult:
-    answer: str
-    charts: list[dict[str, Any]]
-    executed_queries: list[str] = field(default_factory=list)
-    plan: dict[str, Any] = field(default_factory=dict)
 
 
 ALLOWED_ACTIONS = {"aggregate", "compare_metrics", "time_series", "profile", "distribution", "profit_bridge"}
@@ -44,27 +34,6 @@ ALLOWED_FILTER_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in
 # Trần số dòng trả về. Kết quả còn phải đi qua LLM synthesis nên limit khổng lồ
 # vừa phình payload vừa phình token — chặn ngay ở tầng validate.
 MAX_PLAN_LIMIT = 10_000
-
-
-def run_planned_analysis(
-    df: pd.DataFrame,
-    question: str | None,
-    profile: dict[str, Any],
-    history: list[dict[str, str]] | None = None,
-) -> PlannerResult:
-    if not question:
-        raise ValueError("Planner needs a user question.")
-
-    plan = _build_plan_with_llm(df, question, profile, history)
-    result = execute_plan(df, plan)
-    answer = _synthesize_answer(question, result, plan, source_df=df)
-    charts = _build_charts_from_result(result, plan)
-    return PlannerResult(
-        answer=answer,
-        charts=charts,
-        executed_queries=[_describe_plan(plan)],
-        plan=plan,
-    )
 
 
 def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
@@ -502,30 +471,6 @@ def _detect_value_filter(normalized_question: str, df: pd.DataFrame) -> tuple[st
         if phrase in values_lower:
             return col, values_lower[phrase]
     return None
-
-
-def _build_plan_with_llm(
-    df: pd.DataFrame,
-    question: str,
-    profile: dict[str, Any],
-    history: list[dict[str, str]] | None = None,
-) -> dict[str, Any]:
-    import logging
-    _log = logging.getLogger(__name__)
-    try:
-        client = get_llm_client()
-        prompt = _build_planner_prompt(df, question, profile, history)
-        raw = client.generate(prompt, max_tokens=900, temperature=0.0, top_p=0.9)
-        plan = _extract_json_object(raw)
-        plan = _repair_plan_for_question(plan, question)
-        _validate_plan_against_dataframe(df, plan)
-        return plan
-    except Exception as exc:
-        _log.error("LLM planner failed — falling back to rule-based: %s: %s", type(exc).__name__, exc)
-        fallback = build_fallback_plan(df, question)
-        fallback["_planner_fallback_reason"] = str(exc)
-        _validate_plan_against_dataframe(df, fallback)
-        return fallback
 
 
 def _build_multi_sheet_catalog(session: Any) -> str:
@@ -1267,40 +1212,6 @@ def _build_charts_from_result(result: pd.DataFrame, plan: dict[str, Any]) -> lis
     return []
 
 
-def _synthesize_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
-    data_summary = _deterministic_answer(question, result, plan, source_df=source_df)
-    if result.empty:
-        return data_summary
-    try:
-        client = get_llm_client()
-        rows_text = result.head(15).to_string(index=False, max_colwidth=50)
-        currency_note = _build_currency_warning(source_df, plan) or ""
-        prompt = f"""Bạn là senior data analyst. Dùng kết quả phân tích sau để trả lời câu hỏi của người dùng.
-
-Câu hỏi: {question}
-
-Kết quả phân tích từ dataset:
-{rows_text}
-{f"LƯU Ý: {currency_note}" if currency_note else ""}
-
-Yêu cầu:
-- Trả lời thẳng vào câu hỏi, không giải thích bạn đang làm gì
-- Nêu số liệu quan trọng nhất trước, sau đó insight và hành động đề xuất
-- Ngắn gọn (3-5 câu), viết tiếng Việt tự nhiên
-- Không bắt đầu bằng "Câu hỏi này...", "Dựa trên...", hay bất kỳ meta-commentary nào
-- Không bịa số liệu ngoài kết quả phân tích"""
-        answer = client.generate(prompt, max_tokens=400, temperature=0.3)
-        stripped = answer.strip()
-        bad_starts = ("error", "exception", "traceback", "none", "null", "undefined")
-        if len(stripped) >= 50 and not stripped.lower().startswith(bad_starts):
-            _log.info("LLM synthesis succeeded for question=%r", question[:80])
-            return stripped
-        _log.warning("LLM synthesis returned invalid response (%d chars)", len(stripped))
-    except Exception as exc:
-        _log.warning("LLM synthesis failed for question=%r: %s: %s", question[:80], type(exc).__name__, exc)
-    return data_summary
-
-
 def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, Any], source_df: pd.DataFrame | None = None) -> str:
     filters = plan.get("filters", []) or []
     filter_desc = ""
@@ -1444,22 +1355,6 @@ def _format_cell(value: Any) -> str:
     return str(value).replace("|", "\\|")
 
 
-def _describe_plan(plan: dict[str, Any]) -> str:
-    compact = {k: v for k, v in plan.items() if not k.startswith("_")}
-    return json.dumps(compact, ensure_ascii=False)
-
-
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```$", "", text)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError(f"LLM did not return JSON: {raw[:200]}")
-    return json.loads(text[start : end + 1])
-
-
 def _aggregate_series(series: pd.Series, aggregation: str) -> Any:
     if aggregation == "count":
         return int(series.count())
@@ -1530,24 +1425,6 @@ def _pick_metric(df: pd.DataFrame, tokens: tuple[str, ...]) -> str | None:
         if any(token in normalized for token in normalized_tokens):
             return str(col)
     return None
-
-
-def _quarter_filters(normalized_question: str, date_column: str, default_year: int) -> list[dict[str, Any]]:
-    year_match = re.search(r"\b(20\d{2})\b", normalized_question)
-    year = int(year_match.group(1)) if year_match else default_year
-    filters: list[dict[str, Any]] = [
-        {"column": date_column, "operator": "between", "value": [f"{year}-01-01", f"{year}-12-31"]}
-    ]
-    quarters = _mentioned_quarters(normalized_question)
-    if quarters:
-        filters.append(
-            {
-                "column": "quarter",
-                "operator": "in",
-                "value": [f"{year}Q{quarter}" for quarter in sorted(quarters)],
-            }
-        )
-    return filters
 
 
 def _mentioned_quarters(normalized_question: str) -> set[int]:
