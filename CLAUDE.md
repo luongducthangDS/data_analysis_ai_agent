@@ -45,7 +45,7 @@
 - File export sàn: thêm định dạng mới = thêm 1 dict vào `EXPORT_HEADERS`; giá vốn ghép từ bảng `sku, gia_von` qua `attach_cogs`.
 - "Vì sao lãi đổi" = action `profit_bridge` (`ecommerce_semantic.profit_bridge`): 4 hạng mục cộng lại PHẢI bằng Δ lãi
   (giá vốn lấy phần dư). Gợi ý hành động sinh tất định ở `bridge_actions`, LLM không tự nghĩ; test bám đáp án S1/S4.
-- Thêm action mới cho planner: sửa CẢ `ALLOWED_ACTIONS` (`analysis_planner.py`) lẫn `_ALLOWED_ACTIONS` + `_ACTION_ALIASES` (`agents/nodes/plan.py`).
+- Thêm action mới cho planner: sửa CẢ `ALLOWED_ACTIONS` (`services/planner/execute.py`) lẫn `_ALLOWED_ACTIONS` + `_ACTION_ALIASES` (`agents/nodes/plan.py`).
 - So khớp từ khoá trên câu hỏi đã bỏ dấu phải khớp NGUYÊN TỪ (`\b`): chuỗi con "ai " từng khớp nhầm "lãi"/"loại"/"cái".
 - Chạy test: `.venv/Scripts/python.exe -m pytest -q` (python hệ thống thiếu pytest-mock → 5 lỗi giả ở test_api).
 - eval_100 cần server đang chạy: `tests/eval_100.py --base-url http://localhost:PORT --ids ...`; baseline ở `docs/eval-baseline/`.

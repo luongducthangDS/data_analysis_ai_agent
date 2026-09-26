@@ -10,10 +10,10 @@ _log = logging.getLogger(__name__)
 def execute_node(state: AgentState) -> AgentState:
     """
     Run the analysis plan (Pandas operations). Pure deterministic — no LLM.
-    Reuses execute_plan() from analysis_planner.
+    Reuses execute_plan() from services/planner/execute.py.
     """
     from backend.app.services.storage import session_store, build_source_frame
-    from backend.app.services.analysis_planner import execute_plan
+    from backend.app.services.planner.execute import execute_plan
 
     if state.get("plan") is None:
         _log.error("execute_node: no plan available")

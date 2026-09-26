@@ -25,11 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd
 import pytest
 
-from backend.app.services.analysis_planner import (
-    MAX_PLAN_LIMIT,
-    execute_plan,
-    _validate_plan_against_dataframe,
-)
+from backend.app.services.planner.execute import MAX_PLAN_LIMIT, execute_plan, _validate_plan_against_dataframe
 from backend.app.services.security import (
     BlockedURLError,
     assert_public_url,

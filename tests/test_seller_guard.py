@@ -11,7 +11,9 @@ import pandas as pd
 import pytest
 
 from backend.app.agents.nodes.synthesize import _no_rows_answer
-from backend.app.services.analysis_planner import _repair_filter_values, build_fallback_plan, execute_plan
+from backend.app.services.planner.execute import execute_plan
+from backend.app.services.planner.fallback import build_fallback_plan
+from backend.app.services.planner.llm_plan import _repair_filter_values
 from backend.app.services.ecommerce_semantic import asks_profit, cogs_gap
 from backend.app.services.storage import SessionStore
 from scripts.gen_shop_lan import PARAMS
@@ -144,7 +146,7 @@ def test_fee_rate_by_channel_is_ratio_of_sums(full):
 
 
 def test_ratio_must_reference_plan_metrics(full):
-    from backend.app.services.analysis_planner import _validate_plan_against_dataframe
+    from backend.app.services.planner.execute import _validate_plan_against_dataframe
     with pytest.raises(ValueError):
         _validate_plan_against_dataframe(full.dataframe, {
             "action": "aggregate", "metrics": [{"column": "phi_san", "aggregation": "sum", "label": "Phí"}],

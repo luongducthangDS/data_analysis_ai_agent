@@ -2,7 +2,7 @@
 Tests for backend service layer — 16 test functions.
 
 Coverage:
-  profiler (6), analysis_intent (5), reports (2), analysis_planner (3)
+  profiler (6), analysis_intent (5), reports (2), planner (3)
 """
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from backend.app.services.analysis_intent import (
     normalize_text,
 )
 from backend.app.services.reports import write_markdown_report
-from backend.app.services.analysis_planner import build_fallback_plan, execute_plan
+from backend.app.services.planner.execute import execute_plan
+from backend.app.services.planner.fallback import build_fallback_plan
 
 
 # ─────────────────────────────────────────────────────────────────────────────

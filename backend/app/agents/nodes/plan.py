@@ -30,11 +30,11 @@ def plan_node(state: AgentState) -> AgentState:
     """
     from backend.app.services.llm_service import get_llm_client
     from backend.app.services.storage import session_store, build_source_frame
-    from backend.app.services.analysis_planner import (
-        build_fallback_plan, _build_planner_prompt, _validate_plan_against_dataframe,
-        _repair_plan_for_question, _repair_who_plan, _repair_column_names,
-        _repair_id_to_name_group, _repair_filter_values,
-        _build_multi_sheet_catalog,
+    from backend.app.services.planner.execute import _validate_plan_against_dataframe
+    from backend.app.services.planner.fallback import build_fallback_plan
+    from backend.app.services.planner.llm_plan import (
+        _build_planner_prompt, _repair_plan_for_question, _repair_who_plan, _repair_column_names,
+        _repair_id_to_name_group, _repair_filter_values, _build_multi_sheet_catalog,
     )
 
     question = state["question"]
