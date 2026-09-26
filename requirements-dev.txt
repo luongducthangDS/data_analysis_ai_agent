@@ -1,0 +1,6 @@
+# Dev/CI only — the Docker image installs requirements.txt alone.
+-r requirements.txt
+pytest==8.2.2
+pytest-mock==3.14.0
+httpx==0.28.1          # starlette TestClient (test_api.py) + eval_100.py HTTP client
+ruff==0.6.9

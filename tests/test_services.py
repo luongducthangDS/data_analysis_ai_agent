@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import pytest
 
 from backend.app.services.profiler import build_profile
 from backend.app.services.analysis_intent import (

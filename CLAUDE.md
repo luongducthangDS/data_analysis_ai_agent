@@ -18,6 +18,7 @@
 - Thêm cột vào model → `init_db` tự `ADD COLUMN` (chỉ cột nullable). Đổi tên/kiểu cột → cần Alembic.
 - Config đọc qua `get_settings()`, không `os.getenv` rải rác; `.env` nạp ở MỘT chỗ (`core/config.py`).
 - Lỗi ghi DB không được nuốt: log `exception` và báo cho client (upload → 503), trừ khi user đã có kết quả (chat).
+- CI chạy `ruff check backend tests scripts`; dev cài `requirements-dev.txt`.
 
 ### FastAPI route ordering
 - `/{full_path:path}` catch-all phải đăng ký CUỐI CÙNG, sau tất cả `/api/*` routes

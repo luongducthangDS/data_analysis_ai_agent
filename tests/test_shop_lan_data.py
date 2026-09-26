@@ -1,6 +1,5 @@
 """Bộ dữ liệu mô phỏng shop Chị Lan: tất định, đúng tham số, và các kịch bản cài sẵn tìm lại được."""
 import json
-from pathlib import Path
 
 import pandas as pd
 import pytest

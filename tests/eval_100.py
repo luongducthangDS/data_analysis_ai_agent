@@ -1421,7 +1421,7 @@ def main() -> None:
     parser.add_argument("--baseline", default="",              help="File summary.json để so regression")
     args = parser.parse_args()
 
-    print(f"Loading ground truths from datasets...")
+    print("Loading ground truths from datasets...")
     _load_ground_truths()
     print(f"Loaded {len(GROUND_TRUTH)} ground truth values\n")
 

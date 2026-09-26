@@ -51,7 +51,6 @@ def _build_xlsx(session: DatasetSession) -> bytes:
     # ── Sheet 1: KPI Summary ──────────────────────────────────────────────────
     ws_kpi = wb.active
     ws_kpi.title = "KPI"
-    domain = cached.platform or "Dashboard"
     _hrow(ws_kpi, ["Chỉ số", "Giá trị", "So sánh", "Công thức"])
     for i, card in enumerate(cached.kpi_cards, start=2):
         ws_kpi.append([card.label, card.value, card.delta or "—", card.formula or ""])

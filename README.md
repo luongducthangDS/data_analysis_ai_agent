@@ -55,7 +55,7 @@ Backend **validate plan với schema thật của DataFrame** (tên cột, kiể
 ```bash
 # 1. Backend
 python -m venv .venv && .venv/Scripts/activate      # hoặc: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt                   # app + pytest/ruff
 cp .env.example .env                                 # điền GEMINI_API_KEY (bắt buộc)
 
 # 2. Frontend (một lần, để có bản build UI)

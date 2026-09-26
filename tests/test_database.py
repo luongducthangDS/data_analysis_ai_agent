@@ -7,7 +7,7 @@ imported, so the SQLAlchemy engine is already pointing at the temp test DB.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
 
 # conftest.py sets env vars before this import runs
 from backend.app.database import (
