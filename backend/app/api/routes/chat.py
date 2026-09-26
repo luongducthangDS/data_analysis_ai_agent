@@ -11,14 +11,7 @@ from backend.app.agents.runner import AgentOutput, run, stream_answer
 from backend.app.api.deps import RATE_LIMIT, limiter, load_owned_session
 from backend.app.core.auth import get_current_user
 from backend.app.services.llm_service import set_request_keys
-from backend.app.schemas import (
-    AgentChatResponse,
-    AnalyzeRequest,
-    AnalyzeResponse,
-    ChatRequest,
-    ChatResponse,
-)
-from backend.app.services.guardrails import describe_guardrails
+from backend.app.schemas import ChatRequest, ChatResponse
 from backend.app.services.profiler import build_profile
 from backend.app.services.reports import write_markdown_report
 from backend.app.services.storage import session_store, DatasetSession
@@ -26,18 +19,27 @@ from backend.app.services.storage import session_store, DatasetSession
 _log = logging.getLogger(__name__)
 router = APIRouter()
 
+# Clients get this; the real exception goes to the server log only.
+_AGENT_ERROR = "Có lỗi khi phân tích câu hỏi. Vui lòng thử lại."
+
 
 def _persist_and_report(session: DatasetSession, question: str, answer: str, charts: list, source: str = "llm") -> str:
-    """Append turn to history (with source tag) and write markdown report."""
-    session.history.append({"role": "user", "content": question})
-    session.history.append({"role": "assistant", "content": answer, "source": source})
-    if session.profile is None and session.dataframe is not None:
-        session.profile = build_profile(session.dataframe)
-    profile = session.profile or build_profile(session.dataframe)
-    report_id, _ = write_markdown_report(answer, profile, charts)
-    session.report_id = report_id
-    session_store.save(session)
-    return report_id
+    """Append turn to history (with source tag) and write markdown report.
+    Failures are logged loudly, not raised: the user already has the answer."""
+    try:
+        session_store.append_messages(session, [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer, "source": source},
+        ])
+        profile = session.profile or build_profile(session.dataframe)
+        session.profile = profile
+        report_id, _ = write_markdown_report(answer, profile, charts)
+        session.report_id = report_id
+        session_store.save(session)
+        return report_id
+    except Exception:
+        _log.exception("persist failed session=%s — turn not saved", session.session_id)
+        return ""
 
 
 def _to_response(session: DatasetSession, output: AgentOutput) -> ChatResponse:
@@ -63,10 +65,10 @@ def chat(
     session = load_owned_session(req.session_id, _user)
 
     try:
-        output = run(session.session_id, req.question, session.history[-6:])
+        output = run(session.session_id, req.question, session_store.recent_history(session.session_id))
     except Exception as exc:
-        _log.error("chat: agent error session=%s: %s", req.session_id, exc)
-        raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
+        _log.exception("chat: agent error session=%s", req.session_id)
+        raise HTTPException(status_code=500, detail=_AGENT_ERROR) from exc
 
     _persist_and_report(session, req.question, output.answer, output.charts, output.source)
     return _to_response(session, output)
@@ -99,9 +101,8 @@ async def chat_stream(
     )
 
     session = await run_in_threadpool(load_owned_session, req.session_id, _user)
-
-    history_snapshot = list(session.history[-6:])
     session_id = session.session_id
+    history_snapshot = await run_in_threadpool(session_store.recent_history, session_id)
     question = req.question
 
     async def event_generator():
@@ -120,86 +121,16 @@ async def chat_stream(
                 else:
                     # node events
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            _log.error("chat_stream error session=%s: %s", session_id, exc)
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
+        except Exception:
+            _log.exception("chat_stream error session=%s", session_id)
+            yield f"data: {json.dumps({'type': 'error', 'detail': _AGENT_ERROR}, ensure_ascii=False)}\n\n"
             return
 
-        # Persist after streaming completes
+        # Persist after streaming completes — DB + report file write, off the event loop.
         if accumulated_answer:
-            source = final_meta.get("source", "llm")
-            charts = final_meta.get("charts") or []
-            try:
-                # DB + report file write — keep it off the event loop.
-                await run_in_threadpool(
-                    lambda: _persist_and_report(session_store.get(session_id), question,
-                                                accumulated_answer, charts, source)
-                )
-            except Exception as exc:
-                _log.warning("chat_stream: persist failed session=%s: %s", session_id, exc)
+            await run_in_threadpool(
+                _persist_and_report, session_store.get(session_id), question, accumulated_answer,
+                final_meta.get("charts") or [], final_meta.get("source", "llm"),
+            )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-# ── Legacy compat endpoints ───────────────────────────────────────────────────
-
-@router.post("/api/analyze", response_model=AnalyzeResponse)
-@limiter.limit(RATE_LIMIT)
-def analyze_compat(
-    request: Request,
-    req: AnalyzeRequest,
-    _user: dict = Depends(get_current_user),
-) -> AnalyzeResponse:
-    """Legacy /api/analyze — now routes through LangGraph agent."""
-    session = load_owned_session(req.session_id, _user)
-
-    question = req.question or ""
-    if not question:
-        raise HTTPException(status_code=400, detail="Question is required.")
-
-    try:
-        output = run(session.session_id, question, session.history[-6:])
-    except Exception as exc:
-        _log.error("analyze_compat: agent error session=%s: %s", req.session_id, exc)
-        raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
-
-    profile = session.profile or build_profile(session.dataframe)
-    session.profile = profile
-    report_id = _persist_and_report(session, question, output.answer, output.charts, output.source)
-
-    return AnalyzeResponse(
-        session_id=req.session_id,
-        answer=output.answer,
-        profile=profile,
-        charts=output.charts,
-        report_id=report_id,
-        executed_queries=output.executed_queries,
-        guardrails=describe_guardrails(),
-        source=output.source,
-    )
-
-
-@router.post("/api/agent-chat", response_model=AgentChatResponse)
-@limiter.limit(RATE_LIMIT)
-def agent_chat_compat(
-    request: Request,
-    req: ChatRequest,
-    _user: dict = Depends(get_current_user),
-) -> AgentChatResponse:
-    """Legacy /api/agent-chat — now routes through LangGraph agent."""
-    session = load_owned_session(req.session_id, _user)
-
-    try:
-        output = run(session.session_id, req.question, session.history[-6:])
-    except Exception as exc:
-        _log.error("agent_chat_compat: agent error session=%s: %s", req.session_id, exc)
-        raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
-
-    _persist_and_report(session, req.question, output.answer, output.charts, output.source)
-    return AgentChatResponse(
-        session_id=req.session_id,
-        answer=output.answer,
-        charts=output.charts,
-        agent_steps=[],
-        executed_queries=output.executed_queries,
-    )

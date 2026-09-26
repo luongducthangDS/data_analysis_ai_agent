@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Generator
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, create_engine
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/sessions.db")
+from backend.app.core.config import get_settings
+
+DATABASE_URL = get_settings().database_url
 
 # Normalize legacy postgres:// (Railway, Supabase) → postgresql://
 if DATABASE_URL.startswith("postgres://"):
@@ -40,8 +41,8 @@ class SessionModel(Base):
     ecommerce_col_map = Column(JSON, nullable=True, default=None)
     detected_platform = Column(String(32), nullable=True, default=None)
     active_sheet = Column(String(255), nullable=True, default=None)
-    # Full chat history (role/content/source…) — kept in DB so it survives an
-    # ephemeral disk (Render free). chat_history table below is legacy/unused.
+    # Legacy: whole history as one JSON blob, rewritten on every save → lost
+    # updates with >1 worker. Now read-only fallback; new turns go to chat_history.
     chat_log = Column(JSON, nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -60,6 +61,7 @@ class SessionModel(Base):
 
 
 class ChatHistoryModel(Base):
+    """One row per message, append-only — safe with several workers."""
     __tablename__ = "chat_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -71,6 +73,7 @@ class ChatHistoryModel(Base):
     )
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
+    source = Column(String(32), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("SessionModel", back_populates="history")
@@ -102,31 +105,27 @@ class ReportModel(Base):
 
 
 def init_db() -> None:
-    """Create all tables if they don't exist. Called once on app startup."""
+    """Create tables, add missing columns, enable RLS. Idempotent; called from
+    the app lifespan (and tests/conftest.py) — not at import time."""
     Base.metadata.create_all(bind=engine)
-    _migrate_sessions_columns()
+    _add_missing_columns()
     _enable_rls()
 
 
-def _migrate_sessions_columns() -> None:
-    """Idempotent: add columns that post-date the original sessions table
-    (SQLite + PostgreSQL safe). Must list every column added to SessionModel
-    after initial release, or INSERTs silently fail on pre-existing databases."""
-    from sqlalchemy import text
-    new_cols = [
-        ("owner_id", "VARCHAR(64)"),
-        ("ecommerce_col_map", "JSON"),
-        ("detected_platform", "VARCHAR(32)"),
-        ("active_sheet", "VARCHAR(255)"),
-        ("chat_log", "JSON"),
-    ]
-    with engine.connect() as conn:
-        for col_name, col_type in new_cols:
-            try:
-                conn.execute(text(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}"))
-                conn.commit()
-            except Exception:
-                conn.rollback()  # column already exists; Postgres needs rollback before next stmt
+def _add_missing_columns() -> None:
+    """create_all never alters existing tables: add any model column the live
+    table lacks. ponytail: add-only (nullable columns); renames/type changes
+    need a real migration tool (Alembic) — add it when that first happens."""
+    existing = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not existing.has_table(table.name):
+                continue
+            have = {c["name"] for c in existing.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have:
+                    col_type = col.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}'))
 
 
 def _enable_rls() -> None:
@@ -135,7 +134,6 @@ def _enable_rls() -> None:
     table owner, which bypasses RLS."""
     if engine.dialect.name != "postgresql":
         return
-    from sqlalchemy import text
     with engine.begin() as conn:
         for table in Base.metadata.tables:
             conn.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))

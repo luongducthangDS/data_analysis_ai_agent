@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os as _os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,20 +16,21 @@ from backend.app.services.numeric_parse import (
     strip_column_names,
 )
 from backend.app.services.multi_sheet_analyzer import MultiSheetAnalyzer, SheetRelationship
-from backend.app.database import init_db, db_session, ReportModel, SessionFileModel, SessionModel
+from backend.app.core.config import get_settings
+from backend.app.database import db_session, ChatHistoryModel, ReportModel, SessionFileModel, SessionModel
 
 
-# DATA_DIR env var lets Railway mount a persistent volume at a custom path.
+# DATA_DIR lets Railway mount a persistent volume at a custom path.
 # Falls back to "data/" (relative to CWD = /app) for local dev. Disk is only a
 # cache: uploads, history and reports are also stored in DATABASE_URL, so an
 # ephemeral disk (Render free) can be rebuilt from Postgres/Supabase.
-BASE_DATA_DIR = Path(_os.getenv("DATA_DIR", "data"))
+BASE_DATA_DIR = Path(get_settings().data_dir)
 UPLOAD_DIR = BASE_DATA_DIR / "uploads"
 REPORT_DIR = BASE_DATA_DIR / "reports"
 
-# In-memory DataFrame LRU. Lower on small instances (Render free = 512 MB);
-# evicted sessions reload from disk/DB on next access (merged sheets are not kept).
-_MAX_CACHE_SIZE = int(_os.getenv("SESSION_CACHE_SIZE", "200"))
+# In-memory DataFrame LRU; evicted sessions reload from disk/DB on next access
+# (merged sheets are not kept).
+_MAX_CACHE_SIZE = get_settings().session_cache_size
 _CACHE_TTL_SECONDS = 24 * 3600
 
 _log = logging.getLogger(__name__)
@@ -68,12 +68,21 @@ class DatasetSession:
 
 
 class SessionStore:
+    """DB is the source of truth; `_sessions` is a per-process DataFrame cache.
+
+    Multi-worker notes: chat history is append-only rows (no lost updates) and
+    is read back from the DB for each question. Other fields (profile,
+    active_sheet) are last-writer-wins, and a worker keeps its cached copy until
+    eviction — so a sheet switch in worker A shows up in worker B only after B's
+    cache entry expires. Fine for 1 worker (current deploy); add a cache
+    version check if you scale out.
+    """
+
     def __init__(self) -> None:
         self._sessions: dict[str, DatasetSession] = {}
         self._last_accessed: dict[str, float] = {}
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
-        init_db()
 
     def create(self, filename: str, content: bytes, owner_id: str = "") -> DatasetSession:
         return self.create_multiple([(filename, content)], owner_id=owner_id)
@@ -148,9 +157,15 @@ class SessionStore:
             detected_platform=detected_platform,
             active_sheet=active_sheet,
         )
+        try:
+            self._insert_session(session, uploads)
+        except Exception:
+            # Not durable = not created: a RAM-only session would vanish on restart.
+            for path in file_paths:
+                path.unlink(missing_ok=True)
+            raise
         self._sessions[session_id] = session
         self._last_accessed[session_id] = time.time()
-        self._insert_session(session, uploads)
         return session
 
     def set_active_sheet(self, session: DatasetSession, sheet_key: str) -> DatasetSession:
@@ -171,11 +186,7 @@ class SessionStore:
         )
         # Invalidate cached dashboard so it recomputes for the new sheet.
         for attr in ("_dashboard_cache", "_dashboard_charts_raw"):
-            if hasattr(session, attr):
-                try:
-                    delattr(session, attr)
-                except Exception:
-                    pass
+            session.__dict__.pop(attr, None)
         self.save(session)
         return session
 
@@ -192,24 +203,52 @@ class SessionStore:
         return session
 
     def save(self, session: DatasetSession) -> None:
-        """Persist profile, report_id and history to DB."""
+        """Persist profile, report_id, active sheet and e-commerce mapping.
+        History is NOT written here — see append_messages."""
         self._sessions[session.session_id] = session
         self._last_accessed[session.session_id] = time.time()
-        try:
-            with db_session() as db:
-                row = db.get(SessionModel, session.session_id)
-                if row is None:
-                    return
-                row.profile = session.profile
-                row.report_id = session.report_id
-                row.active_sheet = session.active_sheet
-                row.ecommerce_col_map = session.ecommerce_col_map or None
-                row.detected_platform = session.detected_platform
-                row.chat_log = list(session.history)
-                row.updated_at = datetime.utcnow()
-        except Exception as exc:
-            # Don't crash the API if DB is temporarily unavailable — but make it visible.
-            _log.warning("session.save DB write failed (%s): %s", type(exc).__name__, exc)
+        with db_session() as db:
+            row = db.get(SessionModel, session.session_id)
+            if row is None:
+                raise KeyError(f"Unknown session_id: {session.session_id}")
+            row.profile = session.profile
+            row.report_id = session.report_id
+            row.active_sheet = session.active_sheet
+            row.ecommerce_col_map = session.ecommerce_col_map or None
+            row.detected_platform = session.detected_platform
+            row.updated_at = datetime.utcnow()
+
+    def append_messages(self, session: DatasetSession, messages: list[dict[str, str]]) -> None:
+        """Append chat messages as new rows — never rewrites earlier ones, so two
+        workers answering the same session can't overwrite each other."""
+        session.history.extend(messages)
+        with db_session() as db:
+            db.add_all(
+                ChatHistoryModel(session_id=session.session_id, role=m["role"],
+                                 content=m["content"], source=m.get("source"))
+                for m in messages
+            )
+
+    def recent_history(self, session_id: str, n: int = 6) -> list[dict[str, str]]:
+        """Last n messages from the DB (not the RAM copy, which another worker
+        may have made stale). ponytail: ignores the legacy chat_log blob — those
+        sessions expire within SESSION_TTL_DAYS."""
+        with db_session() as db:
+            rows = (
+                db.query(ChatHistoryModel)
+                .filter_by(session_id=session_id)
+                .order_by(ChatHistoryModel.id.desc())
+                .limit(n)
+                .all()
+            )
+            return [self._message_dict(r) for r in reversed(rows)]
+
+    @staticmethod
+    def _message_dict(row: ChatHistoryModel) -> dict[str, str]:
+        msg = {"role": row.role, "content": row.content}
+        if row.source:
+            msg["source"] = row.source
+        return msg
 
     def count(self) -> int:
         try:
@@ -223,50 +262,42 @@ class SessionStore:
         self._sessions.pop(session_id, None)
         self._last_accessed.pop(session_id, None)
 
-        # Remove uploaded files
-        for f in UPLOAD_DIR.glob(f"{session_id}_*"):
-            try:
-                f.unlink()
-            except Exception:
-                pass
+        # DB first (cascades to chat_history / session_files) — a failure here
+        # must reach the caller, not report 204 while the data is still there.
+        report_id = None
+        with db_session() as db:
+            row = db.get(SessionModel, session_id)
+            if row:
+                report_id = row.report_id
+                if report_id and (report := db.get(ReportModel, report_id)):
+                    db.delete(report)
+                db.delete(row)
 
-        # Remove from DB (cascades to chat_history)
-        try:
-            with db_session() as db:
-                row = db.get(SessionModel, session_id)
-                if row:
-                    # Delete associated report file if any
-                    if row.report_id:
-                        report_path = REPORT_DIR / f"{row.report_id}.md"
-                        if report_path.exists():
-                            try:
-                                report_path.unlink()
-                            except Exception:
-                                pass
-                        report = db.get(ReportModel, row.report_id)
-                        if report:
-                            db.delete(report)
-                    db.delete(row)
-        except Exception:
-            pass
+        # Disk is only a cache; a leftover file is harmless, so just log it.
+        files = list(UPLOAD_DIR.glob(f"{session_id}_*"))
+        if report_id:
+            files.append(REPORT_DIR / f"{report_id}.md")
+        for f in files:
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:
+                _log.warning("delete_session: could not remove %s", f, exc_info=True)
 
     def cleanup_old_sessions(self, max_age_days: int = 7) -> int:
         """Delete sessions older than max_age_days. Returns number of sessions deleted."""
         cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        with db_session() as db:
+            old_ids = [
+                sid for (sid,) in
+                db.query(SessionModel.session_id).filter(SessionModel.created_at < cutoff)
+            ]
         deleted = 0
-        try:
-            with db_session() as db:
-                old_rows = (
-                    db.query(SessionModel)
-                    .filter(SessionModel.created_at < cutoff)
-                    .all()
-                )
-                old_ids = [row.session_id for row in old_rows]
-            for sid in old_ids:
+        for sid in old_ids:
+            try:
                 self.delete_session(sid)
                 deleted += 1
-        except Exception:
-            pass
+            except Exception:
+                _log.exception("cleanup: failed to delete session %s", sid)  # retried next run
         return deleted
 
     # ── Private ──────────────────────────────────────────────────────────────
@@ -295,27 +326,24 @@ class SessionStore:
                 self._last_accessed.pop(sid, None)
 
     def _insert_session(self, session: DatasetSession, uploads: list[tuple[str, bytes]]) -> None:
-        try:
-            with db_session() as db:
-                db.add(SessionModel(
-                    session_id=session.session_id,
-                    owner_id=session.owner_id,
-                    filename=session.filename,
-                    file_names=session.file_names,
-                    profile=session.profile,
-                    report_id=session.report_id,
-                    sheet_relationships=self._serialize_relationships(session.sheet_relationships),
-                    sheets_context=session.sheets_context,
-                    ecommerce_col_map=session.ecommerce_col_map or None,
-                    detected_platform=session.detected_platform,
-                    active_sheet=session.active_sheet,
-                    files=[
-                        SessionFileModel(name=Path(filename).name, content=content)
-                        for filename, content in uploads
-                    ],
-                ))
-        except Exception as exc:
-            _log.warning("session._insert_session DB write failed (%s): %s", type(exc).__name__, exc)
+        with db_session() as db:
+            db.add(SessionModel(
+                session_id=session.session_id,
+                owner_id=session.owner_id,
+                filename=session.filename,
+                file_names=session.file_names,
+                profile=session.profile,
+                report_id=session.report_id,
+                sheet_relationships=self._serialize_relationships(session.sheet_relationships),
+                sheets_context=session.sheets_context,
+                ecommerce_col_map=session.ecommerce_col_map or None,
+                detected_platform=session.detected_platform,
+                active_sheet=session.active_sheet,
+                files=[
+                    SessionFileModel(name=Path(filename).name, content=content)
+                    for filename, content in uploads
+                ],
+            ))
 
     def _restore_from_db(self, session_id: str) -> DatasetSession:
         """Load a session from DB and reload its DataFrames from disk,
@@ -355,7 +383,8 @@ class SessionStore:
             analysis_df, active_sheet = self._resolve_active_dataframe(
                 all_sheets, active_sheet=getattr(row, "active_sheet", None)
             )
-            history = list(row.chat_log or [])
+            # Legacy blob (pre append-only) first, then the per-message rows.
+            history = list(row.chat_log or []) + [self._message_dict(h) for h in row.history]
             file_path_first = (
                 UPLOAD_DIR / f"{session_id}_{Path(file_names[0]).name.replace(' ', '_')}"
                 if file_names else None
@@ -473,7 +502,6 @@ class SessionStore:
         raise ValueError("Only CSV, XLSX, and XLS files are supported.")
 
     @staticmethod
-    @staticmethod
     def _normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
         """Dọn một DataFrame vừa nạp, trước khi mọi thứ khác chạm vào nó.
 
@@ -495,6 +523,7 @@ class SessionStore:
         # 4. thêm metric TMĐT tính sẵn (lãi thật, phí sàn) nếu bảng đúng schema đơn hàng.
         return add_metric_columns(df)
 
+    @staticmethod
     def _coerce_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
         date_name_pattern = re.compile(r"(date|time|ngay|thang|nam)", re.IGNORECASE)

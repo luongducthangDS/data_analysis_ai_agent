@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
 from functools import lru_cache
+
+from dotenv import load_dotenv
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +36,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/sessions.db"
     data_dir: str = "data"
     session_ttl_days: int = 7
+    # DataFrames kept in RAM (LRU); lower on small instances (Render free = 512 MB).
+    session_cache_size: int = 200
 
     # CORS
     allowed_origins: str = "*"  # comma-separated list or "*"
@@ -58,15 +63,17 @@ class Settings(BaseSettings):
             return [k.strip() for k in v.split(",") if k.strip()]
         return v
 
-    @field_validator("langsmith_tracing", mode="before")
-    @classmethod
-    def enable_tracing_if_key(cls, v, info):
-        # Auto-enable tracing when key is present
-        return v
-
     @property
     def effective_gemini_key(self) -> str:
         return self.gemini_api_key or self.google_api_key
+
+
+# Single place .env is loaded. override=True: .env beats the machine env — a
+# stale GEMINI_API_KEY in Windows env vars once masked the new key (401).
+# Except under pytest: conftest's env (temp SQLite) must win, or a DATABASE_URL
+# added to .env would point the test suite at the real database.
+# Production is unaffected: .env is in .gitignore and .dockerignore.
+load_dotenv(override="pytest" not in sys.modules)
 
 
 @lru_cache(maxsize=1)

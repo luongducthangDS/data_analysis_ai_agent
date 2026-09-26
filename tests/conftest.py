@@ -11,13 +11,13 @@ os.environ["ALLOW_NO_AUTH"] = "true"   # auth is fail-closed by default; auth te
 
 import pytest
 import pandas as pd
-from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
-from backend.app.services.storage import session_store
+from backend.app.database import init_db
 from backend.app.api.deps import limiter
 
+init_db()   # the app does this in lifespan; TestClient(app) without `with` skips lifespan
 limiter.enabled = False   # suite would trip 60/minute; test_security_api re-enables it
 
 

@@ -6,17 +6,10 @@ from contextvars import ContextVar
 from typing import Callable, TypedDict
 
 import requests
-from dotenv import load_dotenv
+import backend.app.core.config  # noqa: F401 — nạp .env (một chỗ duy nhất, xem config.py)
 
 from backend.app.services import usage
 
-# override=True: file .env thắng biến môi trường sẵn có của máy.
-# Mặc định của python-dotenv thì ngược lại, và một GEMINI_API_KEY cũ còn sót
-# trong biến môi trường Windows sẽ âm thầm che key mới trong .env — triệu chứng
-# là 401 Unauthenticated dù .env đã đúng.
-# An toàn cho production: .env nằm trong .gitignore lẫn .dockerignore nên không
-# tồn tại trên Railway/Render, ở đó biến của platform vẫn được dùng như cũ.
-load_dotenv(override=True)
 
 _log = logging.getLogger(__name__)
 

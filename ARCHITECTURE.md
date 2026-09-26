@@ -174,11 +174,11 @@ backend/app/
     multi_sheet_analyzer.py  phát hiện quan hệ giữa sheet
     profiler.py           hồ sơ dataset
     ecommerce_columns.py  map cột + đoán nền tảng cho dashboard
-    guardrails.py         whitelist tool, mô tả ràng buộc an toàn
+    security.py           chống SSRF / ReDoS / prompt injection ở ranh giới tin cậy
     reports.py            xuất Markdown
   api/routes/            upload · chat · sheets · dashboard · export · reports · sessions · health
   core/                  config (pydantic-settings) · auth (X-API-Key) · logging (+ LangSmith)
-  database.py            SQLAlchemy models + migration
+  database.py            SQLAlchemy models; init_db (lifespan) tạo bảng + thêm cột thiếu
 frontend/src/main.tsx    toàn bộ UI (chat, preview, dashboard, sheets panel, settings)
 tests/                   101 unit test + eval_100.py
 ```

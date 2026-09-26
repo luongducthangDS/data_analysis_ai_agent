@@ -5,8 +5,7 @@ provided by conftest.py; heavy LLM calls are short-circuited with mocks.
 """
 from __future__ import annotations
 
-import pytest
-from tests.conftest import make_csv_bytes, make_xlsx_bytes
+from tests.conftest import make_csv_bytes
 from backend.app.services.storage import session_store
 
 
@@ -115,41 +114,6 @@ def test_upload_returns_suggested_queries(client, sample_csv_bytes):
 
 
 # ---------------------------------------------------------------------------
-# Analyze
-# ---------------------------------------------------------------------------
-
-def test_analyze_success(client, uploaded_session_id, mock_planned_analysis):
-    resp = client.post(
-        "/api/analyze",
-        json={"session_id": uploaded_session_id, "question": "Tổng amount là bao nhiêu?"},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "answer" in body
-    assert body["answer"]
-
-
-def test_analyze_session_not_found_returns_404(client):
-    resp = client.post(
-        "/api/analyze",
-        json={"session_id": "nonexistent-session-xyz", "question": "Any question?"},
-    )
-    assert resp.status_code == 404
-
-
-def test_analyze_builds_history(client, uploaded_session_id, mock_planned_analysis):
-    resp = client.post(
-        "/api/analyze",
-        json={"session_id": uploaded_session_id, "question": "What is the max amount?"},
-    )
-    assert resp.status_code == 200
-    session = session_store.get(uploaded_session_id)
-    assert len(session.history) >= 1
-    roles = [h["role"] for h in session.history]
-    assert "assistant" in roles
-
-
-# ---------------------------------------------------------------------------
 # Chat
 # ---------------------------------------------------------------------------
 
@@ -185,30 +149,6 @@ def test_chat_builds_history(client, uploaded_session_id, mock_planned_analysis)
     session_after = session_store.get(uploaded_session_id)
     # Chat appends user + assistant = 2 entries
     assert len(session_after.history) >= history_len_before + 2
-
-
-# ---------------------------------------------------------------------------
-# Agent chat
-# ---------------------------------------------------------------------------
-
-def test_agent_chat_success(client, uploaded_session_id, mock_agent_run):
-    resp = client.post(
-        "/api/agent-chat",
-        json={"session_id": uploaded_session_id, "question": "Phân tích dữ liệu cho tôi."},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "answer" in body
-    assert "agent_steps" in body
-    assert body["answer"] == "Agent phân tích xong."
-
-
-def test_agent_chat_session_not_found_returns_404(client):
-    resp = client.post(
-        "/api/agent-chat",
-        json={"session_id": "totally-wrong-id", "question": "Analyze?"},
-    )
-    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

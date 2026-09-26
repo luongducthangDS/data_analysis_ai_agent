@@ -32,7 +32,7 @@ def test_chat_on_someone_elses_session_is_forbidden(client, auth_on, sample_csv_
     assert up.status_code == 200
     body = {"session_id": up.json()["session_id"], "question": "tổng amount"}
 
-    for path in ("/api/chat", "/api/chat/stream", "/api/analyze", "/api/agent-chat"):
+    for path in ("/api/chat", "/api/chat/stream"):
         assert client.post(path, json=body, headers={"X-API-Key": KEY_B}).status_code == 403, path
     assert client.post("/api/chat", json=body, headers={"X-API-Key": KEY_A}).status_code == 200
 

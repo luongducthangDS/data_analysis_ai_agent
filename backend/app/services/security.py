@@ -5,8 +5,6 @@ Ba đầu vào không tin cậy đi vào hệ thống:
   2. Giá trị filter từ LLM plan → `LITERAL_CONTAINS`  chống ReDoS
   3. Nội dung file upload đi vào prompt → `sanitize_for_prompt()`  giảm prompt injection
 
-Tách riêng khỏi `guardrails.py` — file đó chỉ *mô tả* guardrail cho UI,
-còn file này *thực thi* chúng.
 """
 from __future__ import annotations
 

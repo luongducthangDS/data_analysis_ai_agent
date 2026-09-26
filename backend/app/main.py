@@ -5,11 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv(override=True)   # .env thắng biến môi trường máy — xem services/llm_service.py
-
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +16,7 @@ from backend.app.api.deps import limiter
 from backend.app.api.routes import chat, dashboard, export, health, reports, sessions, sheets, upload
 from backend.app.core.config import get_settings
 from backend.app.core.logging import setup_langsmith, setup_logging
+from backend.app.database import init_db
 
 # ── Bootstrap ────────────────────────────────────────────────────────────────
 _settings = get_settings()
@@ -48,8 +45,11 @@ async def _cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(_cleanup_loop())
+    # Schema setup at startup, not at import: importing a module shouldn't hit the DB.
+    await asyncio.to_thread(init_db)
+    cleanup = asyncio.create_task(_cleanup_loop())   # keep a ref, or it can be GC'd
     yield
+    cleanup.cancel()
 
 
 # ── App factory ───────────────────────────────────────────────────────────────
@@ -106,6 +106,8 @@ def home() -> HTMLResponse:
 
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 def spa_fallback(full_path: str) -> HTMLResponse:
+    if full_path.startswith("api/"):   # mistyped API path → JSON 404, not the SPA with 200
+        raise HTTPException(status_code=404, detail="Not Found")
     index = DIST_DIR / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))

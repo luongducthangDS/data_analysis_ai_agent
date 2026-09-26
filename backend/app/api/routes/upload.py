@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.api.deps import RATE_LIMIT, limiter
 from backend.app.core.auth import get_current_user
@@ -55,6 +56,22 @@ def _generate_suggested_queries(df, profile: dict) -> list[str]:
     return suggestions[:8]
 
 
+def _create_session_or_http_error(uploads: list[tuple[str, bytes]], owner_id: str) -> UploadResponse:
+    """Map failures to status codes without leaking internals: ValueError is our
+    (or pandas') message about the file itself → 400 as-is; a DB failure → 503;
+    anything else is logged and gets a generic 400."""
+    try:
+        return _build_upload_response(uploads, owner_id=owner_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("upload: DB write failed")
+        raise HTTPException(status_code=503, detail="Không lưu được dữ liệu, vui lòng thử lại sau.") from exc
+    except Exception as exc:
+        _log.exception("upload: could not parse %s", [name for name, _ in uploads])
+        raise HTTPException(status_code=400, detail="Không đọc được file. Kiểm tra lại định dạng CSV/XLSX.") from exc
+
+
 def _build_upload_response(uploads: list[tuple[str, bytes]], owner_id: str = "") -> UploadResponse:
     session = session_store.create_multiple(uploads, owner_id=owner_id)
     profile = build_profile(session.dataframe)
@@ -64,10 +81,7 @@ def _build_upload_response(uploads: list[tuple[str, bytes]], owner_id: str = "")
     sheet_names = list(session.sheets.keys()) if session.sheets else None
     file_sheet_map: dict[str, list[str]] = {}
     for sheet_key in sheet_names or []:
-        if "::" in sheet_key:
-            file_name, sheet_name = sheet_key.split("::", 1)
-        else:
-            file_name, sheet_name = sheet_key, sheet_key
+        file_name = sheet_key.split("::", 1)[0]   # "file::sheet" → file; plain CSV key → itself
         file_sheet_map.setdefault(file_name, []).append(sheet_key)
 
     preview_columns, preview_rows = build_preview(session.dataframe)
@@ -122,10 +136,7 @@ def upload_dataset(
             raise HTTPException(status_code=413, detail="MVP upload limit is 10MB per file.")
         uploads.append((file.filename, content))
 
-    try:
-        return _build_upload_response(uploads, owner_id=_user.get("user_id", ""))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _create_session_or_http_error(uploads, _user.get("user_id", ""))
 
 
 @router.post("/api/import-url", response_model=UploadResponse)
@@ -140,8 +151,6 @@ def import_from_url(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Không thể tải file: {exc}") from exc
-    try:
-        return _build_upload_response([(filename, content)], owner_id=_user.get("user_id", ""))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _log.exception("import-url: fetch failed")
+        raise HTTPException(status_code=400, detail="Không thể tải file từ URL này.") from exc
+    return _create_session_or_http_error([(filename, content)], _user.get("user_id", ""))

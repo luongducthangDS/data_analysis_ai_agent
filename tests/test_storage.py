@@ -115,12 +115,11 @@ def test_save_persists_profile_to_db():
     assert restored.profile == {"rows": 5, "columns": 4}
 
 
-def test_save_persists_history_to_db():
+def test_append_messages_persists_history_to_db():
     store = _fresh_store()
     session = store.create("h.csv", make_csv_bytes())
-    session.history.append({"role": "user", "content": "hello"})
-    session.history.append({"role": "assistant", "content": "hi"})
-    store.save(session)
+    store.append_messages(session, [{"role": "user", "content": "hello"},
+                                    {"role": "assistant", "content": "hi"}])
     store._sessions.clear()
     restored = store.get(session.session_id)
     assert len(restored.history) == 2
@@ -132,8 +131,7 @@ def test_restore_after_disk_wiped_uses_db_copy():
     """Ephemeral host (Render free): uploads dir wiped, DB (Supabase) survives."""
     store = _fresh_store()
     session = store.create("wiped.csv", make_csv_bytes())
-    session.history.append({"role": "assistant", "content": "ok", "source": "llm"})
-    store.save(session)
+    store.append_messages(session, [{"role": "assistant", "content": "ok", "source": "llm"}])
     for f in UPLOAD_DIR.glob(f"{session.session_id}_*"):
         f.unlink()
     store._sessions.clear()
