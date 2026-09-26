@@ -26,6 +26,11 @@ _UNIT_SUFFIXES = ("vnd", "vnđ", "usd", "eur", "gbp", "jpy", "aud", "cad", "đ")
 # Giá trị mang nghĩa "trống" trong báo cáo tài chính.
 _BLANK_TOKENS = {"", "-", "--", "—", "–", "n/a", "na", "nan", "none", "null", "."}
 
+_CURRENCY_RE = re.compile(f"[{re.escape(_CURRENCY_CHARS)}]")
+_DOT_THOUSANDS_RE = re.compile(r"[+-]?\d{1,3}(\.\d{3})+")
+_LETTER_RE = re.compile(r"[A-Za-zÀ-ỹ]")
+_PLAIN_NUMBER_RE = re.compile(r"[+-]?\d*\.?\d+")
+
 
 def parse_number(value: object) -> float | None:
     """Đọc một ô thành float. Trả None khi ô đó không phải số.
@@ -55,7 +60,7 @@ def parse_number(value: object) -> float | None:
                 return None
             text = candidate
             break
-    text = re.sub(f"[{re.escape(_CURRENCY_CHARS)}]", "", text).strip()
+    text = _CURRENCY_RE.sub("", text).strip()
 
     # Ngoặc đơn = số âm (quy ước kế toán).
     negative = text.startswith("(") and text.endswith(")")
@@ -70,7 +75,7 @@ def parse_number(value: object) -> float | None:
     # Dạng phân cách nghìn kiểu Việt/Âu phải xét TRƯỚC float() trực tiếp:
     # float("1.900") = 1.9, trong khi "1.900" ở đây gần như luôn là 1900.
     # Yêu cầu đúng cụm 3 chữ số nên "1.90" (thập phân thật) không dính.
-    if re.fullmatch(r"[+-]?\d{1,3}(\.\d{3})+", text):
+    if _DOT_THOUSANDS_RE.fullmatch(text):
         number = float(text.replace(".", ""))
         return -number if negative else number
 
@@ -84,11 +89,11 @@ def parse_number(value: object) -> float | None:
 
     # Còn sót chữ cái → đây là text, không phải số. Phải trả None, nếu không
     # một cột tên sản phẩm sẽ bị biến thành cột 0.
-    if re.search(r"[A-Za-zÀ-ỹ]", text):
+    if _LETTER_RE.search(text):
         return None
 
     text = _normalize_separators(text)
-    if not re.fullmatch(r"[+-]?\d*\.?\d+", text):
+    if not _PLAIN_NUMBER_RE.fullmatch(text):
         return None
 
     try:
@@ -133,7 +138,15 @@ def parse_numeric_series(series: pd.Series) -> pd.Series:
     # Nếu cách nhanh đã đọc được hết thì khỏi đi đường chậm.
     if converted.notna().sum() == series.notna().sum():
         return converted
-    return series.map(parse_number).astype("float64")
+    return map_unique(series, parse_number).astype("float64")
+
+
+def map_unique(series: pd.Series, fn) -> pd.Series:
+    """`series.map(fn)` nhưng gọi `fn` một lần cho mỗi giá trị khác nhau (cột trạng thái, SKU, tỉnh lặp rất nhiều)."""
+    if series.empty:  # map({}) đổi dtype sang float → `.str` phía sau vỡ
+        return series.copy()
+    uniques = series.dropna().unique()
+    return series.map(dict(zip(uniques, map(fn, uniques))))
 
 
 # Tỉ lệ ô đọc được tối thiểu để coi cả cột là cột số. Đặt cao để một cột chữ
@@ -154,7 +167,7 @@ def coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
         non_null = series.notna().sum()
         if not non_null:
             continue
-        parsed = series.map(parse_number)
+        parsed = map_unique(series, parse_number)
         if parsed.notna().sum() >= MIN_PARSE_RATIO * non_null:
             df[column] = parsed.astype("float64")
     return df

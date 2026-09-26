@@ -190,7 +190,9 @@ def profit_bridge(df: pd.DataFrame, plan: dict) -> pd.DataFrame:
     Cột: hang_muc | <kỳ gốc> | <kỳ so sánh> | anh_huong_lai. Các hạng mục cộng lại đúng bằng Δ lãi.
     Không có `periods` → tháng cuối cùng trong dữ liệu so với tháng trước đó.
     """
-    dates = pd.to_datetime(df[plan.get("time_column") or "ngay_dat"], errors="coerce")
+    dates = df[plan.get("time_column") or "ngay_dat"]
+    if not pd.api.types.is_datetime64_any_dtype(dates):
+        dates = pd.to_datetime(dates, errors="coerce")
     periods = plan.get("periods")
     if not periods:
         last = dates.max()

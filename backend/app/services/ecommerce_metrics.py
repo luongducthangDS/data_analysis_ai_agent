@@ -8,12 +8,14 @@ All columns are resolved strictly from col_map — no guessing.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 import pandas as pd
 
 from backend.app.services.ecommerce_columns import CANCEL_STATUSES, RETURN_STATUSES
+from backend.app.services.numeric_parse import map_unique
 
 
 @dataclass
@@ -37,23 +39,26 @@ class EcommerceKPIs:
     mapped_cols: dict[str, str] = field(default_factory=dict)  # which cols were used
 
 
+def _norm_status(v: object) -> str:
+    t = unicodedata.normalize("NFKD", str(v).strip().lower())
+    return "".join(ch for ch in t if not unicodedata.combining(ch))
+
+
 def _normalize_status(series: pd.Series) -> pd.Series:
     """Lowercase + strip diacritics for Vietnamese status matching."""
-    import unicodedata
-    def _norm(v: str) -> str:
-        t = unicodedata.normalize("NFKD", str(v).strip().lower())
-        return "".join(ch for ch in t if not unicodedata.combining(ch))
-    return series.fillna("").map(_norm)
+    return map_unique(series.fillna(""), _norm_status)
+
+
+_CANCEL_RE = "|".join(re.escape(s) for s in CANCEL_STATUSES)
+_RETURN_RE = "|".join(re.escape(s) for s in RETURN_STATUSES)
 
 
 def _is_cancelled(status_norm: pd.Series) -> pd.Series:
-    pattern = "|".join(re.escape(s) for s in CANCEL_STATUSES)
-    return status_norm.str.contains(pattern, na=False)
+    return status_norm.str.contains(_CANCEL_RE, na=False)
 
 
 def _is_returned(status_norm: pd.Series) -> pd.Series:
-    pattern = "|".join(re.escape(s) for s in RETURN_STATUSES)
-    return status_norm.str.contains(pattern, na=False)
+    return status_norm.str.contains(_RETURN_RE, na=False)
 
 
 def _format_vnd(value: float) -> str:

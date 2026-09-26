@@ -32,8 +32,8 @@ MAX_PLAN_LIMIT = 10_000
 
 def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     _validate_plan_shape(plan)
-    work = df.copy()
-    work = _apply_derived_columns(work, plan.get("derived_columns", []))
+    # Không copy df ở đây: derived/filter tự trả frame mới, các action sau chỉ đọc.
+    work = _apply_derived_columns(df, plan.get("derived_columns", []))
     work = _apply_filters(work, plan.get("filters", []))
 
     action = plan["action"]
@@ -125,6 +125,8 @@ def _validate_derived_sources(known: set[str], derived: dict[str, Any]) -> None:
 
 
 def _apply_derived_columns(df: pd.DataFrame, derived_columns: list[dict[str, Any]]) -> pd.DataFrame:
+    if not derived_columns:
+        return df
     work = df.copy()
     for derived in derived_columns or []:
         name = derived["name"]
@@ -149,15 +151,18 @@ def _apply_derived_columns(df: pd.DataFrame, derived_columns: list[dict[str, Any
 
 
 def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFrame:
-    work = df.copy()
-    for item in filters or []:
+    if not filters:
+        return df
+    # AND các mask trên bảng gốc rồi cắt MỘT lần — tương đương lọc tuần tự, khỏi copy sau mỗi filter.
+    keep = pd.Series(True, index=df.index)
+    for item in filters:
         col = item["column"]
         op = item["operator"]
         value = item.get("value")
-        series = work[col]
+        series = df[col]
         is_dt = pd.api.types.is_datetime64_any_dtype(series)
         if is_dt:
-            series_cmp = pd.to_datetime(series, errors="coerce")
+            series_cmp = series
             if isinstance(value, list):
                 value_cmp = [pd.to_datetime(v) for v in value]
             else:
@@ -200,8 +205,8 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
             )
         else:
             raise ValueError(f"Unsupported filter operator: {op}")
-        work = work.loc[mask].copy()
-    return work
+        keep &= mask
+    return df.loc[keep]
 
 
 def _is_date_only(value: Any) -> bool:
@@ -267,23 +272,21 @@ def _execute_time_series(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame
     grain = plan.get("grain", "month")
     if not time_col:
         raise ValueError("time_series needs time_column.")
-    work = df.copy()
-    if grain == "quarter" and not pd.api.types.is_datetime64_any_dtype(work[time_col]):
-        work["_period"] = work[time_col].astype(str)
+    if grain == "quarter" and not pd.api.types.is_datetime64_any_dtype(df[time_col]):
+        period = df[time_col].astype(str)
     else:
-        dt = pd.to_datetime(work[time_col], errors="coerce")
-        if grain == "quarter":
-            work["_period"] = dt.dt.to_period("Q").astype(str)
-        elif grain == "year":
-            work["_period"] = dt.dt.year
-        elif grain == "date":
-            work["_period"] = dt.dt.date.astype(str)
-        else:
-            work["_period"] = dt.dt.to_period("M").astype(str)
+        dt = df[time_col]
+        if not pd.api.types.is_datetime64_any_dtype(dt):  # to_datetime trên cột đã là datetime vẫn tốn vài ms
+            dt = pd.to_datetime(dt, errors="coerce")
+        # Group theo Period rồi mới đổi nhãn sang chuỗi: format vài nhóm thay vì mọi dòng, và NaT bị bỏ
+        # (astype(str) trước khi group từng biến ngày hỏng thành nhóm "NaT").
+        period = dt.dt.year if grain == "year" else dt.dt.to_period({"quarter": "Q", "date": "D"}.get(grain, "M"))
 
     plan2 = dict(plan)
     plan2["group_by"] = ["_period"]
-    result = _execute_aggregate(work.dropna(subset=["_period"]), plan2)
+    result = _execute_aggregate(df.assign(_period=period).dropna(subset=["_period"]), plan2)
+    if isinstance(result["_period"].dtype, pd.PeriodDtype):
+        result["_period"] = result["_period"].astype(str)
     return result.rename(columns={"_period": grain})
 
 

@@ -268,3 +268,12 @@ def test_negative_result_cited_as_decrease_is_grounded():
     df = pd.DataFrame({"hang_muc": ["Lãi trước QC"], "anh_huong_lai": [-11567470.0]})
     assert _numbers_grounded("Lãi tháng 5 giảm 11.567.470 so với tháng 4.", df) is True
     assert _numbers_grounded("Lãi tháng 5 giảm 21.567.470 so với tháng 4.", df) is False
+
+
+from backend.app.services.numeric_parse import map_unique  # noqa: E402
+
+
+def test_map_unique_matches_map_and_keeps_empty_dtype():
+    s = pd.Series(["1.500đ", None, "1.500đ", "abc", "(2,5)"] * 3, dtype=object)
+    pd.testing.assert_series_equal(map_unique(s, parse_number).astype(float), s.map(parse_number).astype(float))
+    assert map_unique(pd.Series([], dtype=object), str.lower).dtype == object

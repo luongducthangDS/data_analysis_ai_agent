@@ -131,3 +131,17 @@ def test_write_markdown_report_returns_report_id():
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report_id, _ = write_markdown_report("Answer.", _make_profile(), [])
     assert isinstance(report_id, str) and len(report_id) > 0
+
+
+def test_time_series_drops_bad_dates_and_keeps_period_labels():
+    from backend.app.services.planner.execute import execute_plan
+    df = pd.DataFrame({"d": pd.to_datetime(["2026-01-05", "2026-01-20", None, "2026-02-01"]), "v": [1, 2, 4, 8]})
+    plan = {"action": "time_series", "time_column": "d", "metrics": [{"column": "v", "aggregation": "sum"}]}
+    for grain, labels in {"month": ["2026-01", "2026-02"], "quarter": ["2026Q1"],
+                          "date": ["2026-01-05", "2026-01-20", "2026-02-01"]}.items():
+        out = execute_plan(df, {**plan, "grain": grain})
+        assert out[grain].tolist() == labels  # không có nhóm "NaT"
+    # nhiều filter gộp mask = lọc tuần tự
+    filt = [{"column": "v", "operator": "gte", "value": 2}, {"column": "d", "operator": "lte", "value": "2026-01-31"}]
+    out = execute_plan(df, {"action": "aggregate", "metrics": [{"column": "v", "aggregation": "sum"}], "filters": filt})
+    assert out.iloc[0, 0] == 2
