@@ -35,7 +35,7 @@ PARAMS = {
     "return_damage_share": 0.10,  # giả định: 10% hàng hoàn không bán lại được
     "ads_share": 0.07,        # giả định: ngân sách quảng cáo ~7% doanh thu
     "orders_per_day": 66,     # ~2.000 đơn/tháng (persona)
-    "tiktok_share": 0.40,     # giả định
+    "tiktok_share": 0.36,     # TikTok 35% / (Shopee 62% + TikTok 35%) doanh số toàn thị trường Q1/2025 (Metric.vn, qua Vietdata); chưa tách riêng ngành thời trang
 }
 
 CATEGORIES = {"Áo": 45, "Váy/Đầm": 35, "Quần": 30, "Chân váy": 20, "Set đồ": 12, "Phụ kiện": 8}
