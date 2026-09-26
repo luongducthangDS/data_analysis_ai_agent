@@ -48,3 +48,7 @@ logs/
 .vscode/
 Thumbs.db
 desktop.ini
+
+# Internal notes — local only, not pushed
+docs/LESSONS.md
+docs/*_FEEDBACK_*.md

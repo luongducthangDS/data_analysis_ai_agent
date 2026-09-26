@@ -1,3 +1,11 @@
+## Ghi sai lầm & bài học (BẮT BUỘC)
+
+- Sau mỗi lần sửa lỗi thật (bug, deploy hỏng, eval chấm sai, hiểu sai yêu cầu, hoặc chính Claude làm sai rồi phải sửa):
+  thêm 1 mục vào đầu `docs/LESSONS.md` theo mẫu Sai gì / Gốc rễ / Sửa / Bài học, kèm hash commit.
+- Ghi ngay lúc sửa, không để dồn cuối. `docs/LESSONS.md` và `docs/UX_FEEDBACK_*.md` là ghi chú nội bộ, đã gitignore — KHÔNG đưa lên GitHub.
+  Docs được README link tới (EVALUATION, ENGINEERING, eval-baseline) thì vẫn commit bình thường.
+- Bài học lặp lại hoặc dễ tái phạm → rút thêm thành 1 dòng quy tắc trong CLAUDE.md.
+
 ## Lessons — Deploy Errors (2026-05-26)
 
 ### Khi edit config deploy, phải trace flow thực thi end-to-end trước khi confirm xong
@@ -8,6 +16,9 @@
 - Nếu dùng `builder = "dockerfile"`, Railway vẫn chạy `startCommand` nếu có —
   `startCommand` không expand shell variable (`$PORT` → lỗi, phải dùng `sh -c`)
 - Khi chuyển builder, phải kiểm tra xem `startCommand` có conflict không
+
+### Git Bash đổi đối số `/path` thành đường dẫn Windows
+- Gọi CLI (render, railway…) với đối số `/api/...` từ Git Bash → thêm `MSYS_NO_PATHCONV=1`, rồi đọc lại giá trị đã lưu
 
 ### Route mới: session qua `load_owned_session`/`get_session`, gọi LLM thì gắn `@limiter.limit(RATE_LIMIT)`
 - Không gọi `session_store.get(id)` trần trong route (bỏ qua kiểm tra chủ). Code chặn (pandas, DB) → route `def`, không `async def`.
@@ -32,7 +43,16 @@
 - Metric tiền (lãi, phí sàn) định nghĩa MỘT chỗ ở `backend/app/services/ecommerce_semantic.py`, tính sẵn lúc nạp file
   (`SessionStore._normalize_frame`). LLM chỉ sum các cột này, không tự ghép công thức. `loi_nhuan_truoc_qc` CHƯA trừ quảng cáo.
 - File export sàn: thêm định dạng mới = thêm 1 dict vào `EXPORT_HEADERS`; giá vốn ghép từ bảng `sku, gia_von` qua `attach_cogs`.
+- "Vì sao lãi đổi" = action `profit_bridge` (`ecommerce_semantic.profit_bridge`): 4 hạng mục cộng lại PHẢI bằng Δ lãi
+  (giá vốn lấy phần dư). Gợi ý hành động sinh tất định ở `bridge_actions`, LLM không tự nghĩ; test bám đáp án S1/S4.
 - Thêm action mới cho planner: sửa CẢ `ALLOWED_ACTIONS` (`analysis_planner.py`) lẫn `_ALLOWED_ACTIONS` + `_ACTION_ALIASES` (`agents/nodes/plan.py`).
 - So khớp từ khoá trên câu hỏi đã bỏ dấu phải khớp NGUYÊN TỪ (`\b`): chuỗi con "ai " từng khớp nhầm "lãi"/"loại"/"cái".
 - Chạy test: `.venv/Scripts/python.exe -m pytest -q` (python hệ thống thiếu pytest-mock → 5 lỗi giả ở test_api).
 - eval_100 cần server đang chạy: `tests/eval_100.py --base-url http://localhost:PORT --ids ...`; baseline ở `docs/eval-baseline/`.
+- Lời hứa seller đo bằng `tests/eval_seller.py --base-url ...` (25 câu × 3 cách nạp A đủ / B không giá vốn / C thiếu 1/3);
+  `wrong_looks_right` phải = 0 trước khi release. Phần tất định chạy offline ở `tests/test_seller_guard.py`.
+- Thiếu đầu vào của metric → KHÔNG tạo cột đó (không fill 0, không để LLM thay cột khác); câu hỏi cần nó trả lời
+  từ chối tất định (`missing_cogs_notice`). Cảnh báo dữ liệu nối vào câu trả lời ở `profit_notes`, không nhờ LLM nhớ.
+- Kết quả tổng hợp 0 dòng phải là "không có dữ liệu" (bảng rỗng), không phải số 0. Cắt dữ liệu trước khi đưa LLM thì ghi rõ còn bao nhiêu dòng.
+- Vá code có regex bằng script: ghi script ra file rồi chạy (heredoc từng biến `\b` thành backspace); sau đó `grep -P '\x08'`.
+- Thêm field vào response API, giá trị `source` mới, hoặc câu trả lời nhắc tới một nút → sửa `frontend/src/main.tsx` trong cùng thay đổi (đã có lần backend bảo "bấm Tải mẫu giá vốn" mà UI không có nút).
