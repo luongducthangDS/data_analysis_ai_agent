@@ -6,10 +6,10 @@ import pandas as pd
 import pytest
 
 from backend.app.agents.nodes.plan import _ALLOWED_ACTIONS as _NODE_ACTIONS
-from backend.app.services.analysis_planner import (
-    ALLOWED_ACTIONS, _deterministic_answer, _pick_metric_from_question, _repair_who_plan,
-    _validate_plan_against_dataframe, build_fallback_plan, execute_plan,
-)
+from backend.app.services.planner.execute import ALLOWED_ACTIONS, _validate_plan_against_dataframe, execute_plan
+from backend.app.services.planner.answer import _deterministic_answer
+from backend.app.services.planner.fallback import _pick_metric_from_question, build_fallback_plan
+from backend.app.services.planner.llm_plan import _repair_who_plan
 from backend.app.services.ecommerce_columns import detect_ecommerce_columns
 from backend.app.services.ecommerce_semantic import (
     FEE_RATE_ROW, METRICS, PROFIT_ROW, RETURN_RATE_ROW, add_metric_columns, attach_cogs, bridge_actions,

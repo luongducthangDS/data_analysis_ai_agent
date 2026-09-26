@@ -112,7 +112,7 @@ def test_financial_sample_totals_match_manual_sum():
 
 # ── repair: câu hỏi về toàn bộ dataset ─────────────────────────────────────
 
-from backend.app.services.analysis_planner import _repair_whole_dataset_aggregate  # noqa: E402
+from backend.app.services.planner.llm_plan import _repair_whole_dataset_aggregate  # noqa: E402
 
 
 def _plan(**kw):
@@ -170,7 +170,7 @@ def test_repair_ignores_non_aggregate_actions():
 
 # ── repair: nhóm theo tên thay vì mã ────────────────────────────────────────
 
-from backend.app.services.analysis_planner import _repair_id_to_name_group  # noqa: E402
+from backend.app.services.planner.llm_plan import _repair_id_to_name_group  # noqa: E402
 
 _PRODUCTS = pd.DataFrame(
     {"product_id": ["P001"], "product_name": ["MacBook"], "unit_price": [1]}

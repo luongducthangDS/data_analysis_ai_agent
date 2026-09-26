@@ -10,7 +10,7 @@
 Khi không đọc được, cả file bị tính sai im lặng: `sum()` trên cột toàn NaN
 trả về 0, và agent tự tin báo "Tổng lợi nhuận là 0".
 
-Tách riêng thành module để `storage` (lúc nạp file) và `analysis_planner`
+Tách riêng thành module để `storage` (lúc nạp file) và `planner`
 (lúc thực thi plan) cùng dùng mà không tạo vòng import.
 """
 from __future__ import annotations

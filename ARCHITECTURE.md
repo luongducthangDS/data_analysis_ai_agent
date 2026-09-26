@@ -66,7 +66,7 @@ stateDiagram-v2
 
 LLM **không bao giờ** chạm vào dữ liệu trực tiếp. Nó chỉ xuất một plan JSON được kiểm định 3 lớp trước khi thực thi.
 
-**Grammar** (`analysis_planner.py`):
+**Grammar** (`services/planner/execute.py`):
 
 ```
 action        ∈ {aggregate, compare_metrics, time_series, profile, distribution}
@@ -167,7 +167,8 @@ backend/app/
     nodes/                classify · plan · execute · synthesize · respond
   services/
     llm_service.py        FailoverLLMClient, chuỗi Gemini/OpenRouter, per-request key
-    analysis_planner.py   plan grammar, validate, execute_plan, dựng chart
+    planner/              execute (grammar, validate, execute_plan) · fallback (plan theo luật)
+                          · llm_plan (prompt + sửa plan của LLM) · answer (chart + câu trả lời tất định)
     analysis_intent.py    suy luận ý định grouped-metric (fallback)
     query_classifier.py   classify bot_info / off_topic / data_summary / data_query
     storage.py            SessionStore, build_source_frame, resolve_sheet_key

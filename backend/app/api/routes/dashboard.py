@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends
 
 from backend.app.api.deps import get_current_user, get_session
 from backend.app.schemas import ChartSpec, DashboardResponse, KPICard
-from backend.app.services.analysis_planner import execute_plan
+from backend.app.services.planner.execute import execute_plan
 from backend.app.services.ecommerce_semantic import METRICS, cogs_gap, fmt_num, fmt_pct, seller_questions
 from backend.app.services.storage import DatasetSession
 
