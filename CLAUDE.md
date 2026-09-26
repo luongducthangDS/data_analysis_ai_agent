@@ -9,6 +9,10 @@
   `startCommand` không expand shell variable (`$PORT` → lỗi, phải dùng `sh -c`)
 - Khi chuyển builder, phải kiểm tra xem `startCommand` có conflict không
 
+### Route mới: session qua `load_owned_session`/`get_session`, gọi LLM thì gắn `@limiter.limit(RATE_LIMIT)`
+- Không gọi `session_store.get(id)` trần trong route (bỏ qua kiểm tra chủ). Code chặn (pandas, DB) → route `def`, không `async def`.
+- File route có `@limiter.limit` không được dùng `from __future__ import annotations` (FastAPI không resolve được type body).
+
 ### FastAPI route ordering
 - `/{full_path:path}` catch-all phải đăng ký CUỐI CÙNG, sau tất cả `/api/*` routes
 - FastAPI match theo thứ tự đăng ký — đặt sai chỗ sẽ nuốt mất các route phía sau

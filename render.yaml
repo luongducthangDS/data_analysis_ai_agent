@@ -27,10 +27,12 @@ services:
         sync: false
 
       # ── Auth ────────────────────────────────────────────────────────────────
-      # API_KEYS: comma-separated list, e.g. "key1,key2,key3".
-      # Left empty → all requests pass (see backend/app/core/auth.py).
+      # Auth is fail-closed (backend/app/core/auth.py): ALLOW_NO_AUTH=false with
+      # empty API_KEYS → every request gets 401. The web UI sends no X-API-Key,
+      # so the public demo must opt in explicitly. Rate limit (RATE_LIMIT,
+      # default 60/minute per IP) is what protects LLM quota in this mode.
       - key: ALLOW_NO_AUTH
-        value: "false"
+        value: "true"
       - key: API_KEYS
         sync: false
 

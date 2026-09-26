@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
-from backend.app.api.deps import get_session, limiter
+from backend.app.api.deps import RATE_LIMIT, limiter
 from backend.app.core.auth import get_current_user
 from backend.app.schemas import ImportUrlRequest, UploadResponse
 from backend.app.services.profiler import build_profile
@@ -98,8 +96,15 @@ def build_preview(df, n: int = 10) -> tuple[list[str], list[dict]]:
     return columns, rows
 
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
 @router.post("/api/upload", response_model=UploadResponse)
-async def upload_dataset(
+@limiter.limit(RATE_LIMIT)
+def upload_dataset(
+    # Sync on purpose: pandas parsing is CPU-bound; FastAPI runs a `def` route
+    # in the threadpool so one big upload doesn't freeze the event loop.
+    request: Request,
     files: list[UploadFile] = File(...),
     _user: dict = Depends(get_current_user),
 ) -> UploadResponse:
@@ -112,8 +117,8 @@ async def upload_dataset(
             raise HTTPException(status_code=400, detail="Missing filename.")
         if Path(file.filename).suffix.lower() not in {".csv", ".xlsx", ".xls"}:
             raise HTTPException(status_code=400, detail="Only CSV, XLSX, and XLS files are supported.")
-        content = await file.read()
-        if len(content) > 10 * 1024 * 1024:
+        content = file.file.read(MAX_UPLOAD_BYTES + 1)  # never load more than the limit
+        if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="MVP upload limit is 10MB per file.")
         uploads.append((file.filename, content))
 
@@ -124,7 +129,9 @@ async def upload_dataset(
 
 
 @router.post("/api/import-url", response_model=UploadResponse)
+@limiter.limit(RATE_LIMIT)
 def import_from_url(
+    request: Request,
     req: ImportUrlRequest,
     _user: dict = Depends(get_current_user),
 ) -> UploadResponse:

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # Auth & multi-tenancy
     api_keys: list[str] = Field(default_factory=list)
-    allow_no_auth: bool = True  # True for local dev / web UI
+    allow_no_auth: bool = False  # fail-closed; set ALLOW_NO_AUTH=true for local dev / keyless web UI
 
     # Rate limiting
     rate_limit: str = "60/minute"

@@ -279,17 +279,17 @@ class SessionStore:
 
     def _evict_stale(self) -> None:
         now = time.time()
-        stale = [
-            sid for sid, t in self._last_accessed.items()
-            if now - t > _CACHE_TTL_SECONDS
-        ]
+        # Snapshot first: sync routes + the cleanup thread touch this dict
+        # concurrently, and iterating it live raises "changed size during iteration".
+        accessed = list(self._last_accessed.items())
+        stale = [sid for sid, t in accessed if now - t > _CACHE_TTL_SECONDS]
         for sid in stale:
             self._sessions.pop(sid, None)
             self._last_accessed.pop(sid, None)
 
         # Enforce max cache size via LRU eviction
         if len(self._sessions) > _MAX_CACHE_SIZE:
-            oldest = sorted(self._last_accessed, key=lambda s: self._last_accessed[s])
+            oldest = [sid for sid, _ in sorted(accessed, key=lambda kv: kv[1]) if sid in self._sessions]
             for sid in oldest[: len(self._sessions) - _MAX_CACHE_SIZE]:
                 self._sessions.pop(sid, None)
                 self._last_accessed.pop(sid, None)

@@ -7,6 +7,7 @@ _TEST_DIR = tempfile.mkdtemp(prefix="data_agent_test_")
 os.environ["DATA_DIR"] = _TEST_DIR
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DIR}/test.db"
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
+os.environ["ALLOW_NO_AUTH"] = "true"   # auth is fail-closed by default; auth tests flip it
 
 import pytest
 import pandas as pd
@@ -15,6 +16,9 @@ from fastapi.testclient import TestClient
 
 from backend.app.main import app
 from backend.app.services.storage import session_store
+from backend.app.api.deps import limiter
+
+limiter.enabled = False   # suite would trip 60/minute; test_security_api re-enables it
 
 
 def make_csv_bytes(df: pd.DataFrame | None = None) -> bytes:

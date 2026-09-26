@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,6 +25,9 @@ from backend.app.core.logging import setup_langsmith, setup_logging
 _settings = get_settings()
 setup_logging(_settings.debug)
 setup_langsmith(_settings.langsmith_api_key, _settings.langsmith_project)
+_log = logging.getLogger(__name__)
+if not _settings.allow_no_auth and not _settings.api_keys:
+    _log.error("ALLOW_NO_AUTH=false and API_KEYS is empty: every API request will get 401.")
 
 # React build output (frontend/vite.config.ts → outDir: "../dist")
 DIST_DIR = Path(__file__).resolve().parents[2] / "dist"
@@ -34,9 +38,12 @@ async def _cleanup_loop() -> None:
     while True:
         await asyncio.sleep(3600)
         try:
-            session_store.cleanup_old_sessions(max_age_days=_settings.session_ttl_days)
+            # DB + file deletes are blocking — run them off the event loop.
+            await asyncio.to_thread(
+                session_store.cleanup_old_sessions, max_age_days=_settings.session_ttl_days
+            )
         except Exception:
-            pass
+            _log.exception("session cleanup failed")
 
 
 @asynccontextmanager

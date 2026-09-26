@@ -1,14 +1,14 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from typing import Optional
 
 from backend.app.agents.runner import AgentOutput, run, stream_answer
+from backend.app.api.deps import RATE_LIMIT, limiter, load_owned_session
 from backend.app.core.auth import get_current_user
 from backend.app.services.llm_service import set_request_keys
 from backend.app.schemas import (
@@ -53,15 +53,14 @@ def _to_response(session: DatasetSession, output: AgentOutput) -> ChatResponse:
 
 
 @router.post("/api/chat", response_model=ChatResponse)
+@limiter.limit(RATE_LIMIT)
 def chat(
+    request: Request,
     req: ChatRequest,
     _user: dict = Depends(get_current_user),
 ) -> ChatResponse:
     """Unified chat endpoint — routes through LangGraph agent."""
-    try:
-        session = session_store.get(req.session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session = load_owned_session(req.session_id, _user)
 
     try:
         output = run(session.session_id, req.question, session.history[-6:])
@@ -74,7 +73,9 @@ def chat(
 
 
 @router.post("/api/chat/stream")
+@limiter.limit(RATE_LIMIT)
 async def chat_stream(
+    request: Request,
     req: ChatRequest,
     _user: dict = Depends(get_current_user),
     x_gemini_key: Optional[str] = Header(default=None, alias="X-GEMINI-Key"),
@@ -97,10 +98,7 @@ async def chat_stream(
         provider=x_llm_provider or "",
     )
 
-    try:
-        session = session_store.get(req.session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session = await run_in_threadpool(load_owned_session, req.session_id, _user)
 
     history_snapshot = list(session.history[-6:])
     session_id = session.session_id
@@ -132,8 +130,11 @@ async def chat_stream(
             source = final_meta.get("source", "llm")
             charts = final_meta.get("charts") or []
             try:
-                sess = session_store.get(session_id)
-                _persist_and_report(sess, question, accumulated_answer, charts, source)
+                # DB + report file write — keep it off the event loop.
+                await run_in_threadpool(
+                    lambda: _persist_and_report(session_store.get(session_id), question,
+                                                accumulated_answer, charts, source)
+                )
             except Exception as exc:
                 _log.warning("chat_stream: persist failed session=%s: %s", session_id, exc)
 
@@ -143,15 +144,14 @@ async def chat_stream(
 # ── Legacy compat endpoints ───────────────────────────────────────────────────
 
 @router.post("/api/analyze", response_model=AnalyzeResponse)
+@limiter.limit(RATE_LIMIT)
 def analyze_compat(
+    request: Request,
     req: AnalyzeRequest,
     _user: dict = Depends(get_current_user),
 ) -> AnalyzeResponse:
     """Legacy /api/analyze — now routes through LangGraph agent."""
-    try:
-        session = session_store.get(req.session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session = load_owned_session(req.session_id, _user)
 
     question = req.question or ""
     if not question:
@@ -180,15 +180,14 @@ def analyze_compat(
 
 
 @router.post("/api/agent-chat", response_model=AgentChatResponse)
+@limiter.limit(RATE_LIMIT)
 def agent_chat_compat(
+    request: Request,
     req: ChatRequest,
     _user: dict = Depends(get_current_user),
 ) -> AgentChatResponse:
     """Legacy /api/agent-chat — now routes through LangGraph agent."""
-    try:
-        session = session_store.get(req.session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session = load_owned_session(req.session_id, _user)
 
     try:
         output = run(session.session_id, req.question, session.history[-6:])
