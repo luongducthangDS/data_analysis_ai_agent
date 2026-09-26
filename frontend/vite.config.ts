@@ -10,7 +10,7 @@ export default defineConfig({
     commonjsOptions: { transformMixedEsModules: true },
   },
   optimizeDeps: {
-    include: ["react-plotly.js", "plotly.js"],
+    include: ["react-plotly.js/factory", "plotly.js-basic-dist-min"],
   },
   server: {
     port: 5173,

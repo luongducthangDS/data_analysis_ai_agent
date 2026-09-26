@@ -1,11 +1,19 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo, lazy, memo, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import Plot from "react-plotly.js";
 import {
   Check, CircleAlert, Download, Eye, EyeOff, FileSpreadsheet, FileText, GitMerge, KeyRound,
-  LayoutDashboard, LineChart, MessageSquare, Plus, Send, ShieldCheck, Table2, Upload, X,
+  LayoutDashboard, LineChart, Menu, MessageSquare, Plus, Send, ShieldCheck, Square, Store, Table2, TriangleAlert, Upload, X,
 } from "lucide-react";
 import "./styles.css";
+
+// Plotly is the heaviest chunk — load it only when the first chart renders, not on the welcome screen.
+const Plot = lazy(() => import("./Plot"));
+
+// Error bodies aren't always JSON (Render returns an HTML 502 page) — never let r.json() throw.
+async function errorDetail(r: Response, fallback: string): Promise<string> {
+  const body = await r.json().catch(() => null);
+  return (body && typeof body.detail === "string" && body.detail) || `${fallback} (mã ${r.status})`;
+}
 
 // ── LLM Keys (localStorage) ───────────────────────────────────────────────────
 const LS = {
@@ -44,6 +52,10 @@ function SettingsModal({
   const [keys, setKeys] = useState(loadKeys);
   const [reveal, setReveal] = useState({ gemini: false, anthropic: false });
   const [saved, setSaved] = useState(false);
+  const ref = useRef<HTMLDialogElement>(null);
+
+  // Native modal <dialog>: Esc closes, background is inert, focus stays inside.
+  useEffect(() => { ref.current?.showModal(); }, []);
 
   function handleSave() {
     saveKeys(keys);
@@ -52,14 +64,15 @@ function SettingsModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <dialog ref={ref} className="modal" aria-labelledby="settings-title" onClose={onClose}
+      onClick={(e) => e.target === e.currentTarget && ref.current?.close()}>
+      <div className="modal-inner">
         <div className="modal-head">
           <div>
             <h2 className="modal-title" id="settings-title">Khóa API</h2>
             <p className="modal-sub">Dùng khóa của riêng bạn thay cho khóa máy chủ.</p>
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Đóng"><X size={16} /></button>
+          <button className="modal-close" onClick={() => ref.current?.close()} aria-label="Đóng"><X size={16} /></button>
         </div>
 
         <fieldset className="provider-group">
@@ -130,11 +143,11 @@ function SettingsModal({
 
         <div className="modal-actions">
           {saved && <span className="save-toast"><Check size={14} /> Đã lưu</span>}
-          <button className="btn-cancel" onClick={onClose}>Hủy</button>
+          <button className="btn-cancel" onClick={() => ref.current?.close()}>Hủy</button>
           <button className="btn-save" onClick={handleSave}>Lưu khóa</button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -166,7 +179,7 @@ interface Message {
   charts?: ChartSpec[];
   queries?: string[];
   agentSteps?: AgentStep[];
-  source?: "llm" | "fallback" | "bot_info" | "off_topic";
+  source?: "llm" | "fallback" | "deterministic" | "bot_info" | "off_topic";
   streaming?: boolean;
   nodes?: string[];   // graph nodes completed so far (while streaming)
 }
@@ -185,6 +198,7 @@ interface DashboardData {
   kpi_cards: KPICard[];
   charts: ChartSpec[];
   top_products: Record<string, unknown>[];
+  top_label?: string | null;
   col_map: Record<string, string>;
   unmapped_cols: string[];
   is_ecommerce: boolean;
@@ -216,7 +230,7 @@ function makeApi(keys: ReturnType<typeof loadKeys>) {
       files.forEach((f) => form.append("files", f));
       // FormData: can't set Content-Type (browser sets it with boundary), add key headers separately
       const r = await fetch("/api/upload", { method: "POST", headers: kh, body: form });
-      if (!r.ok) throw new Error((await r.json()).detail ?? "Upload failed");
+      if (!r.ok) throw new Error(await errorDetail(r, "Tải tệp lên thất bại"));
       return r.json();
     },
     async importUrl(url: string) {
@@ -225,7 +239,12 @@ function makeApi(keys: ReturnType<typeof loadKeys>) {
         headers: { "Content-Type": "application/json", ...kh },
         body: JSON.stringify({ url }),
       });
-      if (!r.ok) throw new Error((await r.json()).detail ?? "Import failed");
+      if (!r.ok) throw new Error(await errorDetail(r, "Nhập từ URL thất bại"));
+      return r.json();
+    },
+    async sampleShop() {
+      const r = await fetch("/api/sample-shop", { method: "POST", headers: kh });
+      if (!r.ok) throw new Error(await errorDetail(r, "Không nạp được shop mẫu"));
       return r.json();
     },
     keyHeaders: kh,
@@ -233,29 +252,65 @@ function makeApi(keys: ReturnType<typeof loadKeys>) {
 }
 
 // ── Simple markdown renderer ──────────────────────────────────────────────────
-function MdText({ text }: { text: string }) {
+// Inline **bold** and `code` — the backend appends "**Nên kiểm tra:**", which used to render as raw asterisks.
+function inline(text: string): React.ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
+    part.length > 4 && part.startsWith("**") && part.endsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong>
+    : part.length > 2 && part.startsWith("`") && part.endsWith("`") ? <code key={i}>{part.slice(1, -1)}</code>
+    : part);
+}
+
+const NUMERIC_CELL = /^[-−+]?\d[\d.,]*\s*(%|đ|₫|tr|tỷ)?$/;
+
+function MdTable({ rows }: { rows: string[][] }) {
+  const [head, ...body] = rows;
+  const cell = (c: string) => (NUMERIC_CELL.test(c) ? "num" : undefined);
   return (
-    <div className="md">
-      {text.split("\n").map((line, i) => {
-        if (line.startsWith("### ")) return <h3 key={i}>{line.slice(4)}</h3>;
-        if (line.startsWith("## ")) return <h2 key={i}>{line.slice(3)}</h2>;
-        if (line.startsWith("# ")) return <h1 key={i}>{line.slice(2)}</h1>;
-        if (line.startsWith("⚠️")) return <p key={i} className="warn">{line}</p>;
-        if (/^\d+\.\s/.test(line)) return <p key={i} className="li">{line}</p>;
-        if (line.startsWith("- ") || line.startsWith("* ")) return <p key={i} className="li">{line.slice(2)}</p>;
-        if (line.trim() === "") return <div key={i} className="br" />;
-        return <p key={i}>{line}</p>;
-      })}
+    <div className="md-table">
+      <table>
+        <thead><tr>{head.map((c, j) => <th key={j}>{inline(c)}</th>)}</tr></thead>
+        <tbody>{body.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className={cell(c)}>{inline(c)}</td>)}</tr>)}</tbody>
+      </table>
     </div>
   );
 }
 
+// ponytail: line-based markdown subset (headings, lists, bold, code, pipe tables) — swap for react-markdown if answers grow richer.
+function MdText({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const out: React.ReactNode[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trimStart().startsWith("|")) {
+      const rows: string[][] = [];
+      for (; i < lines.length && lines[i].trimStart().startsWith("|"); i++) {
+        const cells = lines[i].trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        if (!cells.every((c) => /^:?-+:?$/.test(c))) rows.push(cells); // drop the |---|---| separator
+      }
+      i--;
+      if (rows.length) out.push(<MdTable key={i} rows={rows} />);
+      continue;
+    }
+    if (line.startsWith("### ")) out.push(<h3 key={i}>{inline(line.slice(4))}</h3>);
+    else if (line.startsWith("## ")) out.push(<h2 key={i}>{inline(line.slice(3))}</h2>);
+    else if (line.startsWith("# ")) out.push(<h1 key={i}>{inline(line.slice(2))}</h1>);
+    else if (line.startsWith("⚠️")) out.push(<p key={i} className="warn">{inline(line)}</p>);
+    else if (/^\d+\.\s/.test(line)) out.push(<p key={i} className="li">{inline(line)}</p>);
+    else if (line.startsWith("- ") || line.startsWith("* ")) out.push(<p key={i} className="li">{inline(line.slice(2))}</p>);
+    else if (line.trim() === "") out.push(<div key={i} className="br" />);
+    else out.push(<p key={i}>{inline(line)}</p>);
+  }
+  return <div className="md">{out}</div>;
+}
+
 // ── Source badge ──────────────────────────────────────────────────────────────
+const DIRECT = { label: "Tính trực tiếp từ dữ liệu", title: "Câu trả lời soạn thẳng từ kết quả tính, không qua AI", cls: "badge-fallback" };
 const SOURCE_LABELS: Record<string, { label: string; title: string; cls: string }> = {
-  llm:       { label: "AI Synthesis",      title: "Answer synthesized by LLM from analysis results", cls: "badge-llm"      },
-  fallback:  { label: "Deterministic",     title: "LLM unavailable — answer built from raw data directly", cls: "badge-fallback" },
-  bot_info:  { label: "Bot Info",          title: "Agent self-description, not data analysis", cls: "badge-bot"      },
-  off_topic: { label: "Off Topic",         title: "Question outside analysis scope", cls: "badge-bot"      },
+  llm:           { label: "AI tóm tắt từ số đã tính", title: "AI viết lại kết quả đã tính; con số nào không khớp dữ liệu sẽ bị loại", cls: "badge-llm" },
+  fallback:      DIRECT,
+  deterministic: DIRECT,
+  bot_info:      { label: "Giới thiệu", title: "Giới thiệu về trợ lý, không phải phân tích dữ liệu", cls: "badge-bot" },
+  off_topic:     { label: "Ngoài phạm vi", title: "Câu hỏi nằm ngoài dữ liệu đã tải lên", cls: "badge-bot" },
 };
 
 function SourceBadge({ source }: { source: string }) {
@@ -264,21 +319,28 @@ function SourceBadge({ source }: { source: string }) {
 }
 
 // ── Plan detail — human-readable execution plan ───────────────────────────────
+const AGG_LABELS: Record<string, string> = {
+  sum: "tổng", mean: "trung bình", median: "trung vị", count: "đếm", nunique: "đếm khác nhau", min: "nhỏ nhất", max: "lớn nhất",
+};
+
 function PlanDetail({ queries }: { queries: string[] }) {
   if (!queries || queries.length === 0) return null;
 
+  type Obj = Record<string, unknown>;
   const renderPlan = (raw: string) => {
     try {
       const p = JSON.parse(raw);
       const chips: string[] = [];
-      if (p.action)        chips.push(`action: ${p.action}`);
-      if (p.metric_col)    chips.push(`metric: ${p.metric_col}`);
-      if (p.group_by?.length)  chips.push(`group by: ${p.group_by.join(", ")}`);
-      if (p.agg)           chips.push(`agg: ${p.agg}`);
-      if (p.sort)          chips.push(`sort: ${p.sort}`);
-      if (p.limit)         chips.push(`top: ${p.limit}`);
-      if (p.filters?.length)   chips.push(`filter: ${p.filters.map((f: Record<string, unknown>) => `${f.column}=${f.value}`).join(", ")}`);
-      if (p.derived_columns?.length) chips.push(`derived: ${p.derived_columns.map((d: Record<string, unknown>) => d.name).join(", ")}`);
+      // Current planner emits metrics[{column, aggregation}] + sort[{column, direction}]; older plans used metric_col/agg.
+      const metrics: Obj[] = p.metrics?.length ? p.metrics : p.metric_col ? [{ column: p.metric_col, aggregation: p.agg }] : [];
+      metrics.forEach((m) => chips.push(`${AGG_LABELS[String(m.aggregation)] ?? m.aggregation ?? ""} ${m.column}`.trim()));
+      if (p.group_by?.length) chips.push(`theo ${p.group_by.join(", ")}`);
+      if (p.filters?.length) chips.push(`lọc ${p.filters.map((f: Obj) => `${f.column} = ${Array.isArray(f.value) ? f.value.join("/") : f.value}`).join(", ")}`);
+      const sort = Array.isArray(p.sort) ? p.sort[0] : null;
+      if (sort) chips.push(`sắp xếp ${sort.direction === "asc" ? "tăng" : "giảm"} dần`);
+      if (p.limit) chips.push(`lấy ${p.limit} dòng đầu`);
+      if (p.derived_columns?.length) chips.push(`cột tính thêm: ${p.derived_columns.map((d: Obj) => d.name).join(", ")}`);
+      if (!chips.length && p.action) chips.push(String(p.action));
       return chips.length ? chips : [raw];
     } catch {
       return [raw];
@@ -287,7 +349,7 @@ function PlanDetail({ queries }: { queries: string[] }) {
 
   return (
     <details className="plan-detail">
-      <summary>Kế hoạch phân tích</summary>
+      <summary>Cách tính</summary>
       <div className="plan-chips">
         {queries.map((q, i) => (
           <div key={i} className="plan-step">
@@ -303,12 +365,14 @@ function PlanDetail({ queries }: { queries: string[] }) {
 
 // ── Node progress strip ───────────────────────────────────────────────────────
 const NODE_LABELS: Record<string, string> = {
-  classify:   "Phân loại",
+  classify:   "Hiểu câu hỏi",
   planner:    "Lập kế hoạch",
-  execute:    "Thực thi",
-  synthesize: "Tổng hợp",
-  bot_info:   "Bot Info",
-  off_topic:  "Off Topic",
+  execute:    "Tính toán",
+  synthesize: "Viết trả lời",
+  bot_info:   "Giới thiệu",
+  off_topic:  "Ngoài phạm vi",
+  data_summary: "Tóm tắt dữ liệu",
+  needs_cogs: "Kiểm tra giá vốn",
 };
 
 const PIPELINE = ["classify", "planner", "execute", "synthesize"];
@@ -362,8 +426,9 @@ function KPICardComponent({ card }: { card: KPICard }) {
       <div className="kpi-label">{card.label}</div>
       <div className="kpi-value">{card.value}</div>
       {card.delta && (
+        // Colour says good/bad, the word says it too — "▲ phí sàn" is bad news in green otherwise.
         <div className={`kpi-delta ${card.delta_positive ? "positive" : "negative"}`}>
-          {card.delta_positive ? "▲" : "▼"} {card.delta}
+          {card.delta} · {card.delta_positive ? "tốt hơn" : "xấu hơn"} kỳ trước
         </div>
       )}
       {card.formula && <div className="kpi-formula" title={card.formula}>{card.formula}</div>}
@@ -372,31 +437,38 @@ function KPICardComponent({ card }: { card: KPICard }) {
 }
 
 // Workspace charts share one card shape; Plotly colours are tuned for the dark theme.
-function ChartCard({ chart, height, exportHref }: { chart: ChartSpec; height: number; exportHref?: string }) {
+// memo + useMemo: chat re-renders on every streamed token — without them every chart in the
+// history got a fresh layout object and Plotly redrew all of them per token.
+const PLOT_CONFIG = { displayModeBar: false };
+const ChartCard = memo(function ChartCard({ chart, height, exportHref }: { chart: ChartSpec; height: number; exportHref?: string }) {
+  const layout = useMemo(() => {
+    const base = chart.plotly_json.layout as Record<string, object>;
+    return {
+      ...base,
+      title: undefined, // the card's figcaption already shows it — Plotly drew it a second time
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      font: { color: "#a9b0d6", family: "Be Vietnam Pro, sans-serif" },
+      colorway: ["#5eead4", "#a78bfa", "#f6c177", "#56609e", "#99f6e4"],
+      separators: ",.", // Vietnamese: 1.234,5
+      xaxis: { automargin: true, gridcolor: "rgba(129,140,248,.14)", zerolinecolor: "rgba(129,140,248,.3)", ...(base.xaxis ?? {}) },
+      yaxis: { automargin: true, gridcolor: "rgba(129,140,248,.14)", zerolinecolor: "rgba(129,140,248,.3)", ...(base.yaxis ?? {}) },
+      margin: { l: 56, r: 16, t: 24, b: 56 },
+    };
+  }, [chart]);
+  const style = useMemo(() => ({ width: "100%", height: `${height}px` }), [height]);
   return (
     <figure className="chart-card">
       <div className="chart-head">
         <figcaption className="chart-title">{chart.title}</figcaption>
         {exportHref && <a className="chart-export-link" href={exportHref} download>Tải PNG</a>}
       </div>
-      <Plot
-        data={chart.plotly_json.data as never}
-        layout={{
-          ...(chart.plotly_json.layout as object),
-          paper_bgcolor: "transparent",
-          plot_bgcolor: "transparent",
-          font: { color: "#a9b0d6", family: "Be Vietnam Pro, sans-serif" },
-          colorway: ["#5eead4", "#a78bfa", "#f6c177", "#56609e", "#99f6e4"],
-          xaxis: { automargin: true, gridcolor: "rgba(129,140,248,.14)", zerolinecolor: "rgba(129,140,248,.3)", ...((chart.plotly_json.layout as Record<string, object>).xaxis ?? {}) },
-          yaxis: { automargin: true, gridcolor: "rgba(129,140,248,.14)", zerolinecolor: "rgba(129,140,248,.3)", ...((chart.plotly_json.layout as Record<string, object>).yaxis ?? {}) },
-          margin: { l: 56, r: 16, t: 24, b: 56 },
-        }}
-        useResizeHandler style={{ width: "100%", height: `${height}px` }}
-        config={{ displayModeBar: false }}
-      />
+      <Suspense fallback={<div className="chart-loading" style={style} aria-label="Đang tải biểu đồ" />}>
+        <Plot data={chart.plotly_json.data as never} layout={layout} useResizeHandler style={style} config={PLOT_CONFIG} />
+      </Suspense>
     </figure>
   );
-}
+});
 
 // ── Dashboard Panel ───────────────────────────────────────────────────────────
 function DashboardPanel({
@@ -423,7 +495,7 @@ function DashboardPanel({
           <p className="panel-sub">KPI do agent chọn theo miền dữ liệu đã nhận diện</p>
         </div>
         {data.platform && (
-          <span className="platform-badge">{data.platform.charAt(0).toUpperCase() + data.platform.slice(1)}</span>
+          <span className="platform-badge">{data.platform}</span>
         )}
       </div>
 
@@ -491,17 +563,17 @@ function DashboardPanel({
             <table>
               <thead>
                 <tr>
-                  <th>#</th>
+                  <th className="num">#</th>
                   <th>Nhóm</th>
-                  <th>Giá trị</th>
+                  <th className="num">{data.top_label || "Giá trị"}</th>
                 </tr>
               </thead>
               <tbody>
                 {data.top_products.map((p, i) => (
                   <tr key={i}>
-                    <td>{String(p.rank ?? i + 1)}</td>
+                    <td className="num">{String(p.rank ?? i + 1)}</td>
                     <td>{String(p.name ?? "")}</td>
-                    <td>{typeof p.value === "number" ? p.value.toLocaleString("vi-VN") : String(p.value ?? "—")}</td>
+                    <td className="num">{typeof p.value === "number" ? Math.round(p.value).toLocaleString("vi-VN") : String(p.value ?? "—")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -622,15 +694,40 @@ function App() {
   const [showImport, setShowImport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeys, setApiKeys] = useState(loadKeys);
+  const [dataNotes, setDataNotes] = useState<string[]>([]);
+  const [cogsMissing, setCogsMissing] = useState(0);
+  const [toast, setToast] = useState("");
+  const [askAgain, setAskAgain] = useState<string[]>([]);   // questions from a session the server dropped
+  const [navOpen, setNavOpen] = useState(false);            // phone: sidebar drawer
+  const [pane, setPane] = useState<"chat" | "workspace">("chat"); // < 1180px: one column at a time
   const fileRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);                            // user is at the bottom of the chat
+  const abortRef = useRef<AbortController | null>(null);
 
   // Rebuild only when keys change — send() closes over this via useCallback deps,
   // so a stale `api` would keep sending the old API-key headers after Settings save.
   const api = useMemo(() => makeApi(apiKeys), [apiKeys]);
   const hasKey = !!(apiKeys.gemini || apiKeys.anthropic);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  // Follow the stream only while the user is at the bottom — reading an older answer must not get yanked down.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNavOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
 
   // Reconstruct the storage key ("file::sheet") from a SheetInfo.
   const sheetKey = (s: SheetInfo) =>
@@ -649,7 +746,11 @@ function App() {
   // Session routes only 404 when the session is gone — on Render free tier ./data is
   // wiped on every restart/redeploy. Drop back to the upload screen instead of a dead UI.
   function expireSession() {
-    alert("Phiên làm việc đã hết hạn (máy chủ vừa khởi động lại). Vui lòng tải lại file.");
+    abortRef.current?.abort();
+    setToast("Phiên làm việc đã hết hạn (máy chủ vừa khởi động lại). Tải lại file để hỏi tiếp — các câu đã hỏi được giữ lại bên dưới ô chat.");
+    setAskAgain(messages.filter((m) => m.role === "user").map((m) => m.content));
+    setDataNotes([]);
+    setCogsMissing(0);
     setSessionId("");
     setProfile(null);
     setPreviewCols([]);
@@ -672,6 +773,8 @@ function App() {
     setPreviewRows((d.preview_rows as Record<string, string>[]) ?? []);
     setSuggestions((d.suggested_queries as string[]) ?? []);
     setActiveSheet((d.active_sheet as string) ?? null);
+    setDataNotes((d.data_notes as string[]) ?? []);
+    setCogsMissing((d.cogs_missing as number) ?? 0);
     setMessages([]);
     setAllCharts([]);
     setDashboardData(null);
@@ -679,6 +782,7 @@ function App() {
     setRelationships([]);
     setTab("preview");
     setShowImport(false);
+    setNavOpen(false);
 
     // Multi-sheet / multi-file workbook → load the sheet inventory so the user can
     // see + switch which sheet is analyzed (no more silent single-sheet selection).
@@ -705,11 +809,14 @@ function App() {
     setPreviewCols((d.preview_columns as string[]) ?? []);
     setPreviewRows((d.preview_rows as Record<string, string>[]) ?? []);
     if (d.suggested_queries) setSuggestions(d.suggested_queries as string[]);
+    if ("data_notes" in d) setDataNotes((d.data_notes as string[]) ?? []);
+    if ("cogs_missing" in d) setCogsMissing((d.cogs_missing as number) ?? 0);
     setActiveSheet((d.active_sheet as string) ?? null);
     setMessages([]);
     setAllCharts([]);
     setReportId("");
     setDashboardData(null);          // force dashboard recompute for the new frame
+    setNavOpen(false);
     fetchDashboard(sessionId);
   }
 
@@ -723,11 +830,11 @@ function App() {
         body: JSON.stringify({ sheet_name: key }),
       });
       if (r.status === 404) return expireSession();
-      if (!r.ok) throw new Error((await r.json()).detail ?? "Đổi sheet thất bại");
+      if (!r.ok) throw new Error(await errorDetail(r, "Đổi sheet thất bại"));
       applyRefresh(await r.json());
       setTab("preview");
     } catch (e: unknown) {
-      alert((e as Error).message);
+      setToast((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -743,7 +850,7 @@ function App() {
         body: JSON.stringify({ session_id: sessionId, sheet_names: names, join_key: joinKey || undefined }),
       });
       if (r.status === 404) return expireSession();
-      if (!r.ok) throw new Error((await r.json()).detail ?? "Gộp sheet thất bại");
+      if (!r.ok) throw new Error(await errorDetail(r, "Gộp sheet thất bại"));
       const resp = await r.json();
       applyRefresh(resp);
       // Refresh sheet inventory so the new merged sheet shows up.
@@ -753,7 +860,7 @@ function App() {
         .catch(() => {});
       setTab("preview");
     } catch (e: unknown) {
-      alert((e as Error).message);
+      setToast((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -763,12 +870,12 @@ function App() {
     const arr = Array.from(files).filter((f) =>
       [".csv", ".xlsx", ".xls"].some((ext) => f.name.toLowerCase().endsWith(ext))
     );
-    if (!arr.length) return alert("Only CSV/XLSX/XLS files are supported.");
+    if (!arr.length) return setToast("Chỉ nhận tệp CSV, XLSX hoặc XLS.");
     setBusy(true);
     try {
       applyUploadResponse(await api.upload(arr));
     } catch (e: unknown) {
-      alert((e as Error).message);
+      setToast((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -781,7 +888,18 @@ function App() {
       applyUploadResponse(await api.importUrl(importUrl.trim()));
       setImportUrl("");
     } catch (e: unknown) {
-      alert((e as Error).message);
+      setToast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadSampleShop() {
+    setBusy(true);
+    try {
+      applyUploadResponse(await api.sampleShop());
+    } catch (e: unknown) {
+      setToast((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -796,6 +914,10 @@ function App() {
     setMessages((m) => [...m, { role: "user", content: q }]);
     setQuestion("");
     setBusy(true);
+    setPane("chat");
+    stickRef.current = true;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     // Append placeholder streaming assistant message
     const assistantIdx = await new Promise<number>((resolve) => {
@@ -810,13 +932,11 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json", ...api.keyHeaders },
         body: JSON.stringify({ session_id: sessionId, question: q }),
+        signal: controller.signal,
       });
 
       if (resp.status === 404) return expireSession();
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: "Stream failed" }));
-        throw new Error(err.detail ?? "Stream failed");
-      }
+      if (!resp.ok) throw new Error(await errorDetail(resp, "Không nhận được câu trả lời"));
 
       const reader = resp.body!.getReader();
       const decoder = new TextDecoder();
@@ -868,15 +988,17 @@ function App() {
         }
       }
     } catch (e: unknown) {
+      const stopped = (e as Error).name === "AbortError";
       setMessages((m) => m.map((msg, i) =>
         i === assistantIdx
-          ? { ...msg, streaming: false, content: `❌ ${(e as Error).message}` }
+          ? { ...msg, streaming: false, content: stopped ? `${msg.content}\n\n(Đã dừng)`.trim() :`❌ ${(e as Error).message}` }
           : msg
       ));
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
-  }, [sessionId, busy, api]);
+  }, [sessionId, busy, api, messages]);
 
   const numericCount = profile ? Object.keys(profile.numeric_summary).length : 0;
   const missingCount = profile ? Object.values(profile.missing_values).reduce((a, b) => a + b, 0) : 0;
@@ -884,6 +1006,10 @@ function App() {
     ? `gộp ${sheets.length} sheet`
     : (activeSheet?.split("::").pop() ?? "");
   const hasDashboard = !!dashboardData?.kpi_cards?.length;
+  const streaming = !!messages[messages.length - 1]?.streaming;
+  const lastAnswer = [...messages].reverse().find((m) => m.role === "assistant" && !m.streaming)?.content ?? "";
+  const numCols = new Set(Object.entries(profile?.column_types ?? {})
+    .filter(([, t]) => /^(int|float)/.test(t)).map(([c]) => c));
 
   const dropHandlers = {
     onDragOver: (e: React.DragEvent) => { e.preventDefault(); setDragging(true); },
@@ -937,8 +1063,25 @@ function App() {
       <input ref={fileRef} type="file" multiple accept=".csv,.xlsx,.xls" hidden
         onChange={(e) => { if (e.target.files) handleFiles(e.target.files); e.target.value = ""; }} />
 
+      {toast && (
+        <div className="toast" role="alert">
+          <CircleAlert size={16} aria-hidden="true" />
+          <span>{toast}</span>
+          <button className="icon-btn" onClick={() => setToast("")} aria-label="Đóng thông báo"><X size={14} /></button>
+        </div>
+      )}
+
+      {/* Phone only: the sidebar becomes a drawer behind this bar (it used to be display:none — no way to add files or switch sheets) */}
+      <header className="topbar">
+        <button className="icon-btn" onClick={() => setNavOpen(true)} aria-label="Mở menu" aria-expanded={navOpen} aria-controls="sidebar">
+          <Menu size={20} />
+        </button>
+        <span className="topbar-brand">SellerLens</span>
+      </header>
+      {navOpen && <div className="scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+
       {/* Sidebar */}
-      <aside className="sidebar">
+      <aside id="sidebar" className={`sidebar${navOpen ? " open" : ""}`}>
         <div className="brand">
           <svg width="30" height="30" viewBox="0 0 28 28" fill="none" aria-hidden="true">
             <defs>
@@ -952,6 +1095,7 @@ function App() {
             <circle cx="24" cy="5" r="1.2" fill="#edefff"/>
           </svg>
           <span>SellerLens</span>
+          <button className="icon-btn nav-close" onClick={() => setNavOpen(false)} aria-label="Đóng menu"><X size={18} /></button>
         </div>
 
         <section className="rail-section">
@@ -1028,35 +1172,71 @@ function App() {
           {planet}
           <div className="welcome-inner">
             <div className="welcome-intro">
-              <span className="eyebrow">Phân tích dữ liệu bằng hội thoại</span>
-              <h1>Hỏi dữ liệu của bạn bằng <span className="grad-text">tiếng Việt.</span></h1>
-              <p>Tải CSV hoặc Excel lên. Agent lập kế hoạch phân tích, chạy trên pandas và trả về số liệu,
-                biểu đồ cùng tóm tắt — mọi con số đều khớp với kết quả tính.</p>
+              <span className="eyebrow">Cho người bán Shopee &amp; TikTok Shop</span>
+              <h1>Biết lãi thật <span className="grad-text">sau phí sàn.</span></h1>
+              <p>Kéo file export đơn hàng Shopee/TikTok vào đây, thêm bảng giá vốn nếu có. Hỏi như nói chuyện —
+                mọi con số trong câu trả lời đều tính từ chính file của bạn.</p>
             </div>
 
             <div className={`drop-hero${dragging ? " dragging" : ""}`} {...dropHandlers}>
               <div className="drop-hero-icon"><Upload size={24} aria-hidden="true" /></div>
               <div className="drop-hero-text">
-                <strong>Kéo thả tệp CSV, XLSX hoặc XLS vào đây</strong>
-                <span>Nhiều tệp cùng lúc · tự nhận diện sheet và quan hệ giữa chúng</span>
+                <strong>Kéo file export Shopee/TikTok vào đây</strong>
+                <span>Chọn nhiều file cùng lúc: đơn hàng, giá vốn (sku, gia_von), chi phí quảng cáo · cũng nhận CSV/Excel bất kỳ</span>
               </div>
-              <button className="btn-accent" onClick={() => fileRef.current?.click()} disabled={busy}>
-                {busy ? "Đang tải lên…" : "Chọn tệp"}
-              </button>
+              <div className="drop-hero-actions">
+                <button className="btn-accent" onClick={() => fileRef.current?.click()} disabled={busy}>
+                  {busy ? "Đang tải lên…" : "Chọn tệp"}
+                </button>
+                <button className="btn-ghost" onClick={loadSampleShop} disabled={busy}>
+                  <Store size={16} aria-hidden="true" /> Dùng thử với shop mẫu
+                </button>
+              </div>
             </div>
+
+            <ol className="how-steps" aria-label="Bạn có thể hỏi">
+              <li><span className="how-num">Lãi từng SKU</span>“SKU nào bán chạy mà đang lỗ?”</li>
+              <li><span className="how-num violet">Vì sao lãi đổi</span>“Vì sao lãi tháng này giảm?”</li>
+              <li><span className="how-num amber">Phí sàn từng kênh</span>“Phí sàn Shopee và TikTok bên nào cao hơn?”</li>
+            </ol>
 
             {urlImport(false)}
 
-            <ol className="how-steps">
-              <li><span className="how-num">01 · Lập kế hoạch</span>LLM chỉ sinh kế hoạch JSON, được kiểm tra với schema thật của bảng.</li>
-              <li><span className="how-num violet">02 · Thực thi</span>Chạy tất định trên pandas. Không eval, không SQL tự do.</li>
-              <li><span className="how-num amber">03 · Đối chiếu</span>Câu trả lời bị loại nếu chứa con số không khớp kết quả tính.</li>
-            </ol>
+            <details className="trust">
+              <summary>Vì sao tin được con số?</summary>
+              <p>AI chỉ chọn cách tính, và cách tính được kiểm tra với cột thật trong file. Phép tính chạy bằng
+                code cố định, không chạy code tự do. Câu trả lời có con số không khớp kết quả tính sẽ bị loại.
+                Shop mẫu là dữ liệu mô phỏng.</p>
+            </details>
           </div>
         </main>
       ) : (
       /* Main — chat column (always visible) + workspace column */
-      <main className="main">
+      <main className="main" data-pane={pane}>
+        {/* < 1180px: chat and workspace take turns instead of splitting the height 50/50 */}
+        <div className="pane-switch segmented" role="group" aria-label="Chế độ xem">
+          <button className={`dash-tab${pane === "chat" ? " active" : ""}`} aria-pressed={pane === "chat"} onClick={() => setPane("chat")}>
+            <MessageSquare size={15} aria-hidden="true" /> Trò chuyện
+          </button>
+          <button className={`dash-tab${pane === "workspace" ? " active" : ""}`} aria-pressed={pane === "workspace"} onClick={() => setPane("workspace")}>
+            <LayoutDashboard size={15} aria-hidden="true" /> Số liệu
+            {allCharts.length > 0 && <span className="badge">{allCharts.length}</span>}
+          </button>
+        </div>
+
+        {/* Data gaps that make profit numbers wrong stay pinned — not buried in one chat answer */}
+        {dataNotes.length > 0 && (
+          <div className="data-notice" role="status">
+            <TriangleAlert size={18} aria-hidden="true" />
+            <ul>{dataNotes.map((n) => <li key={n}>{n}</li>)}</ul>
+            {cogsMissing > 0 && (
+              <a className="notice-btn" href={`/api/session/${sessionId}/cogs-template.csv`} download>
+                <Download size={14} aria-hidden="true" /> Tải mẫu giá vốn
+              </a>
+            )}
+          </div>
+        )}
+
         {/* ── Chat column — permanent, no longer a tab ── */}
         <section className="chat-col">
           <div className="col-head">
@@ -1065,12 +1245,17 @@ function App() {
             {busy && <span className="col-status">Đang xử lý…</span>}
           </div>
 
-          <div className="messages">
+          {/* Streamed text changes per token — announce only the finished answer to screen readers */}
+          <div className="sr-only" aria-live="polite">{lastAnswer}</div>
+          <div className="messages" ref={messagesRef}
+            onScroll={(e) => { const el = e.currentTarget; stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
             {messages.length === 0 && (
               <div className="empty">
                 <div className="empty-icon"><MessageSquare size={32} strokeWidth={1.5} /></div>
-                <div className="empty-title">Hỏi bất kỳ điều gì về dữ liệu</div>
-                <div className="empty-sub">vd. "tổng doanh thu theo vùng" · "top 5 sản phẩm"</div>
+                <div className="empty-title">Hỏi gì về dữ liệu cũng được</div>
+                <div className="empty-sub">
+                  {suggestions.length ? "Bấm một câu gợi ý bên dưới, hoặc tự gõ câu hỏi" : "vd. “lãi tháng này bao nhiêu?” · “SKU nào đang lỗ?”"}
+                </div>
               </div>
             )}
             {messages.map((msg, i) => (
@@ -1110,10 +1295,18 @@ function App() {
                 )}
               </div>
             ))}
-            <div ref={bottomRef} />
           </div>
 
           <div className="composer">
+            {askAgain.length > 0 && (
+              <div className="chat-suggestions">
+                <span className="sugg-label">Hỏi lại</span>
+                {askAgain.map((s) => (
+                  <button key={s} className="chip" disabled={busy}
+                    onClick={() => { setAskAgain((a) => a.filter((x) => x !== s)); send(s); }}>{s}</button>
+                ))}
+              </div>
+            )}
             {suggestions.length > 0 && (
               <div className="chat-suggestions">
                 <span className="sugg-label">Gợi ý</span>
@@ -1124,17 +1317,24 @@ function App() {
             )}
             <div className="input-bar">
               <label htmlFor="ask" className="sr-only">Câu hỏi về dữ liệu</label>
+              {/* Stays editable while an answer streams — you can draft the next question */}
               <textarea id="ask" rows={2}
-                placeholder="Hỏi về dữ liệu… Enter để gửi, Shift+Enter xuống dòng"
-                value={question} disabled={busy}
+                placeholder="Hỏi về shop của bạn… Enter để gửi, Shift+Enter xuống dòng"
+                value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(question); } }}
               />
               <div className="input-btns">
-                <span className="input-hint">Agent chỉ sinh kế hoạch JSON — không chạy code tùy ý</span>
-                <button className="btn-primary" disabled={!question.trim() || busy} onClick={() => send(question)}>
-                  {busy ? "Đang xử lý…" : <><Send size={15} aria-hidden="true" /> Phân tích</>}
-                </button>
+                <span className="input-hint">Mọi con số được tính từ file của bạn</span>
+                {streaming ? (
+                  <button className="btn-stop" onClick={() => abortRef.current?.abort()}>
+                    <Square size={13} aria-hidden="true" /> Dừng
+                  </button>
+                ) : (
+                  <button className="btn-primary" disabled={!question.trim() || busy} onClick={() => send(question)}>
+                    {busy ? "Đang xử lý…" : <><Send size={15} aria-hidden="true" /> Hỏi</>}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1208,13 +1408,13 @@ function App() {
                 )}
                 <div className="tbl-wrap">
                   <table>
-                    <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                    <thead><tr>{previewCols.map((c) => <th key={c} className={numCols.has(c) ? "num" : undefined}>{c}</th>)}</tr></thead>
                     <tbody>
                       {previewRows.map((row, i) => (
                         <tr key={i}>{previewCols.map((c) => {
                           const v = row[c];
                           const empty = v === null || v === undefined || v === "";
-                          return <td key={c}>{empty ? <span className="cell-empty">trống</span> : v}</td>;
+                          return <td key={c} className={numCols.has(c) ? "num" : undefined}>{empty ? <span className="cell-empty">trống</span> : v}</td>;
                         })}</tr>
                       ))}
                     </tbody>
