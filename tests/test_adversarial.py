@@ -28,6 +28,7 @@ import pytest
 from backend.app.services.planner.execute import MAX_PLAN_LIMIT, execute_plan, _validate_plan_against_dataframe
 from backend.app.services.security import (
     BlockedURLError,
+    assert_allowed_import_url,
     assert_public_url,
     looks_like_injection,
     sanitize_for_prompt,
@@ -142,16 +143,19 @@ def test_ssrf_redirect_to_internal_blocked(internal_server, monkeypatch):
     srv = socketserver.TCPServer(("127.0.0.1", 0), _Redirector)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-    real_assert = security.assert_public_url
+    real_allow = security.assert_allowed_import_url
+    real_public = security.assert_public_url
     seen: list[str] = []
 
-    def only_first_hop_allowed(url: str) -> None:
+    def only_first_hop_allowed(url: str, *, first_hop: bool) -> None:
         seen.append(url)
-        if len(seen) == 1:      # giả lập chặng đầu là một URL public hợp lệ
+        if first_hop:           # giả lập chặng đầu là một link Google Sheets hợp lệ
             return
-        real_assert(url)
+        real_allow(url, first_hop=first_hop)
 
-    monkeypatch.setattr(security, "assert_public_url", only_first_hop_allowed)
+    monkeypatch.setattr(security, "assert_allowed_import_url", only_first_hop_allowed)
+    monkeypatch.setattr(security, "assert_public_url",
+                        lambda url: None if len(seen) == 1 else real_public(url))
     try:
         with pytest.raises(BlockedURLError):
             security.safe_fetch(f"http://127.0.0.1:{srv.server_address[1]}/start")
@@ -175,6 +179,82 @@ def test_safe_fetch_does_not_auto_follow_redirects():
 
     src = inspect.getsource(security.safe_fetch)
     assert "allow_redirects=False" in src
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/data.csv",                                 # host lạ
+        "http://docs.google.com/spreadsheets/d/x/export?format=csv",    # không https
+        "https://docs.google.com.evil.example/x",                       # hậu tố giả
+        "https://evil.example/docs.google.com/x",                       # host thật nằm trong path
+        "https://docs.google.com@evil.example/x",                       # userinfo đánh lừa
+        "https://doc-0k-sheets.googleusercontent.com/export/x",         # chỉ hợp lệ ở chặng redirect
+    ],
+)
+def test_import_only_accepts_google_sheets(url):
+    with pytest.raises(BlockedURLError):
+        assert_allowed_import_url(url, first_hop=True)
+
+
+def test_dns_rebinding_host_is_rejected_before_any_lookup(monkeypatch):
+    """DNS rebinding: resolver trả IP public lúc kiểm, IP nội bộ lúc requests connect.
+    Kiểm IP rồi mới request không bịt được khe đó; allowlist thì có — host do attacker
+    điều khiển bị loại trước khi DNS được hỏi lần nào."""
+    from backend.app.services import security
+
+    def no_dns(*args, **kwargs):
+        raise AssertionError("đã phân giải DNS cho host của attacker")
+
+    monkeypatch.setattr(security.socket, "getaddrinfo", no_dns)
+    with pytest.raises(BlockedURLError):
+        security.safe_fetch("https://rebind.attacker.example/data.csv")
+
+
+class _FakeResp:
+    def __init__(self, status: int = 200, location: str | None = None, body: bytes = b""):
+        self.status_code = status
+        self.headers = {"location": location} if location else {}
+        self.is_redirect = location is not None
+        self.is_permanent_redirect = False
+        self._body = body
+
+    def close(self) -> None:
+        pass
+
+    def iter_content(self, _size):
+        yield self._body
+
+
+_EXPORT = "https://docs.google.com/spreadsheets/d/abc/export?format=csv"
+_CDN = "https://doc-0k-sheets.googleusercontent.com/export/abc"
+
+
+def _fake_hops(monkeypatch, hops: dict[str, _FakeResp]) -> None:
+    from backend.app.services import security
+    monkeypatch.setattr(security, "assert_public_url", lambda url: None)   # offline: không hỏi DNS thật
+    monkeypatch.setattr(security.requests, "get", lambda url, **kw: hops[url])
+
+
+def test_import_follows_google_export_redirect_to_its_cdn(monkeypatch):
+    from backend.app.services import security
+    _fake_hops(monkeypatch, {_EXPORT: _FakeResp(307, _CDN), _CDN: _FakeResp(body=b"a,b\n1,2\n")})
+    assert security.safe_fetch(_EXPORT)._content == b"a,b\n1,2\n"
+
+
+def test_google_redirect_to_another_host_is_blocked(monkeypatch):
+    from backend.app.services import security
+    _fake_hops(monkeypatch, {_EXPORT: _FakeResp(302, "https://evil.example/x")})
+    with pytest.raises(BlockedURLError):
+        security.safe_fetch(_EXPORT)
+
+
+def test_private_sheet_gets_a_sharing_hint(monkeypatch):
+    """Sheet chưa chia sẻ → Google redirect sang trang đăng nhập; báo cách sửa, không báo "host lạ"."""
+    from backend.app.services import security
+    _fake_hops(monkeypatch, {_EXPORT: _FakeResp(302, "https://accounts.google.com/ServiceLogin?x=1")})
+    with pytest.raises(BlockedURLError, match="bất kỳ ai có đường liên kết"):
+        security.safe_fetch(_EXPORT)
 
 
 # --------------------------------------------------------------- B. ReDoS

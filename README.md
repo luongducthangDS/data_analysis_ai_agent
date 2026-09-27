@@ -68,7 +68,7 @@ Optional: `GEMINI_API_KEY2` doubles free-tier quota, `OPENROUTER_API_KEY` adds a
 
 The core still reads any CSV/Excel file:
 
-- Upload CSV / XLSX / XLS (multiple files), or paste a public CSV / Google Sheets / Dropbox URL
+- Upload CSV / XLSX / XLS (multiple files), or paste a Google Sheets link shared as “anyone with the link”
 - Auto data profile, streaming chat with inline Plotly charts, auto-generated dashboard
 - Multi-sheet: detects relationships, cross-sheet joins, warns on 1-to-many fan-out
 - Export processed data (CSV) and reports (Markdown)

@@ -1,7 +1,7 @@
 """Lớp phòng thủ cho các ranh giới tin cậy (trust boundary).
 
 Ba đầu vào không tin cậy đi vào hệ thống:
-  1. URL người dùng dán  → `safe_fetch()`        chống SSRF
+  1. URL người dùng dán  → `safe_fetch()`        chống SSRF (allowlist Google Sheets)
   2. Giá trị filter từ LLM plan → `LITERAL_CONTAINS`  chống ReDoS
   3. Nội dung file upload đi vào prompt → `sanitize_for_prompt()`  giảm prompt injection
 
@@ -24,6 +24,31 @@ FETCH_TIMEOUT = 30
 
 class BlockedURLError(ValueError):
     """URL trỏ tới tài nguyên nội bộ hoặc vi phạm chính sách tải."""
+
+
+# Nhập từ URL chỉ phục vụ Google Sheets. Allowlist bịt luôn DNS rebinding:
+# kiểm IP rồi mới request thì resolver của attacker vẫn đổi IP được giữa hai
+# lần hỏi; còn DNS của Google thì attacker không điều khiển được.
+IMPORT_HOSTS = {"docs.google.com"}
+# File export được Google redirect sang CDN này — chỉ hợp lệ ở chặng redirect.
+IMPORT_REDIRECT_SUFFIXES = (".googleusercontent.com",)
+
+
+def assert_allowed_import_url(url: str, *, first_hop: bool) -> None:
+    """Chỉ cho https tới Google Sheets (và CDN của nó ở các chặng redirect)."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() == "https":
+        if host in IMPORT_HOSTS:
+            return
+        if not first_hop and host.endswith(IMPORT_REDIRECT_SUFFIXES):
+            return
+        if not first_hop and host == "accounts.google.com":
+            raise BlockedURLError(
+                "Google Sheet chưa chia sẻ công khai — bật chia sẻ "
+                "“bất kỳ ai có đường liên kết” rồi thử lại."
+            )
+    raise BlockedURLError("Chỉ hỗ trợ link Google Sheets (https://docs.google.com/spreadsheets/…).")
 
 
 def _ip_is_public(ip: str) -> bool:
@@ -66,8 +91,9 @@ def safe_fetch(url: str, *, timeout: int = FETCH_TIMEOUT) -> requests.Response:
     nên ở đây tự lần theo redirect và validate lại mỗi lần.
     """
     current = url
-    for _ in range(MAX_REDIRECTS + 1):
-        assert_public_url(current)
+    for hop in range(MAX_REDIRECTS + 1):
+        assert_allowed_import_url(current, first_hop=hop == 0)
+        assert_public_url(current)   # lớp thứ hai, phòng khi allowlist bị nới
         resp = requests.get(
             current, timeout=timeout, allow_redirects=False, stream=True
         )

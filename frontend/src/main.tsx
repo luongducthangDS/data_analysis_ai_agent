@@ -1019,7 +1019,7 @@ function App() {
 
   const urlImport = (compact: boolean) => (
     <div className={`url-import${compact ? " compact" : ""}`}>
-      <label htmlFor={compact ? "import-url-rail" : "import-url"}>{compact ? "Nhập từ URL" : "Hoặc nhập từ URL"}</label>
+      <label htmlFor={compact ? "import-url-rail" : "import-url"}>{compact ? "Link Google Sheets" : "Hoặc dán link Google Sheets"}</label>
       <div className="url-row">
         <input id={compact ? "import-url-rail" : "import-url"} className="import-input" type="url"
           placeholder="https://docs.google.com/spreadsheets/…"
@@ -1029,7 +1029,7 @@ function App() {
           {busy ? "Đang tải…" : "Nhập"}
         </button>
       </div>
-      <span className="import-hint">CSV/XLSX công khai, Google Sheets chia sẻ “bất kỳ ai có đường liên kết”, liên kết Dropbox</span>
+      <span className="import-hint">Sheet phải chia sẻ “bất kỳ ai có đường liên kết”</span>
     </div>
   );
 

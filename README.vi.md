@@ -50,7 +50,7 @@ Orchestration, failover LLM, grounding, eval, adversarial testing, observability
 
 Lõi phân tích vẫn đọc được file CSV/Excel bất kỳ, nên các tính năng tổng quát dưới đây vẫn giữ. Nhưng bộ metric, cảnh báo và kịch bản eval chỉ được làm sâu cho dữ liệu bán hàng đa sàn.
 
-- **Nhập dữ liệu**: kéo‑thả CSV / XLSX / XLS (nhiều file), hoặc dán URL (CSV public, Google Sheets "anyone with the link", Dropbox).
+- **Nhập dữ liệu**: kéo‑thả CSV / XLSX / XLS (nhiều file), hoặc dán link Google Sheets (chia sẻ "bất kỳ ai có đường liên kết").
 - **Hồ sơ dữ liệu**: số dòng/cột, kiểu, giá trị thiếu, thống kê số, top giá trị phân loại — sinh tự động khi upload.
 - **Chat streaming**: hỏi "doanh thu theo vùng", "top 5 sản phẩm", "phân phối điểm", "xu hướng theo tháng"… → trả lời tiếng Việt + biểu đồ Plotly inline. Biểu đồ chỉ hiện khi có ý nghĩa.
 - **Dashboard**: LLM đọc hồ sơ dữ liệu → tự quyết KPI + biểu đồ phù hợp domain (e‑commerce, tài chính, HR, sản xuất…).

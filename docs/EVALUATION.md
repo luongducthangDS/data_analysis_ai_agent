@@ -335,12 +335,15 @@ việc các lỗ hổng đã phát hiện không tái phát.
 | 3 | **Indirect prompt injection** — tên cột và 5 giá trị mẫu mỗi cột nhúng thẳng vào prompt planner, không sanitize | Trung bình | Tác hại bị giới hạn bởi thiết kế plan-grammar: injection thành công cũng chỉ sinh được plan JSON hợp lệ, không dẫn tới thực thi code |
 | 4 | **limit không có trần** | Thấp | `limit: 10**9` qua được validate, phình payload và token khi synthesize |
 
-Bản vá nằm ở `backend/app/services/security.py` (`safe_fetch`, `assert_public_url`,
+Bản vá nằm ở `backend/app/services/security.py` (`safe_fetch`, `assert_allowed_import_url`, `assert_public_url`,
 `sanitize_for_prompt`, `LITERAL_CONTAINS`).
 
 **Giới hạn còn lại — nói rõ để không phóng đại:**
-- `assert_public_url` phân giải DNS rồi mới request, nên về lý thuyết vẫn còn khe hở
-  DNS rebinding. Bịt hẳn phải connect thẳng bằng IP đã validate và tự set header `Host`.
+- ~~DNS rebinding~~ — đã đóng (2026-09-27): `assert_public_url` phân giải DNS rồi mới
+  request, nên resolver của attacker đổi IP được giữa hai lần hỏi. Nay import-url chỉ nhận
+  `https://docs.google.com` (và CDN `*.googleusercontent.com` ở chặng redirect) qua
+  `assert_allowed_import_url`; host do attacker điều khiển bị loại trước khi DNS được hỏi.
+  Đổi lại: không còn nhập CSV public / Dropbox từ URL.
 - `sanitize_for_prompt` lọc theo danh sách cụm từ — chặn được vector rẻ tiền, không
   chặn được payload viết lại khéo. Lớp phòng thủ thật vẫn là plan-grammar + validate.
 
