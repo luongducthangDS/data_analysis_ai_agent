@@ -5,10 +5,11 @@ import logging
 import re
 from typing import Any
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, stop_any, wait_exponential
 
 from backend.app.agents.state import AgentState
 from backend.app.services import usage
+from backend.app.services.llm_service import deadline_passed
 
 _log = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ _ALLOWED_AGGREGATIONS = {"sum", "mean", "median", "min", "max", "count", "nuniqu
 _ALLOWED_FILTER_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "contains"}
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+@retry(stop=stop_any(stop_after_attempt(3), deadline_passed), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
 def _call_llm(client, prompt: str) -> str:
     return client.generate(prompt, max_tokens=900, temperature=0.0, top_p=0.9)
 

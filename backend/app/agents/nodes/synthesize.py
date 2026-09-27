@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import re
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, stop_any, wait_exponential
 
 from backend.app.agents.state import AgentState
 from backend.app.services.numeric_parse import parse_number
 from backend.app.services import usage
+from backend.app.services.llm_service import deadline_passed
 
 _log = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def _numbers_grounded(answer: str, result_df, extra_allowed: list[float] | None 
     return True
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+@retry(stop=stop_any(stop_after_attempt(3), deadline_passed), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
 def _call_llm(client, prompt: str) -> str:
     with usage.stage("synthesize"):
         return client.generate(prompt, max_tokens=500, temperature=0.3)

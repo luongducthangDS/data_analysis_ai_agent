@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.app.api.deps import get_session
+from backend.app.api.deps import RATE_LIMIT, get_session, limiter
 from backend.app.core.auth import get_current_user
 from pydantic import BaseModel
 
@@ -106,7 +104,9 @@ def set_active_sheet(
 
 
 @router.post("/api/merge-sheets", response_model=MergeSheetsResponse)
+@limiter.limit(RATE_LIMIT)
 def merge_sheets(
+    request: Request,
     req: MergeSheetsRequest,
     _user: dict = Depends(get_current_user),
 ) -> MergeSheetsResponse:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Callable, TypedDict
 
@@ -30,6 +32,30 @@ def set_request_keys(gemini: str = "", anthropic: str = "", provider: str = "") 
     if anthropic: keys["anthropic"] = anthropic
     if provider and provider != "auto": keys["provider"] = provider
     _request_keys.set(keys)
+
+
+# ── Hạn chót cho cả lượt hỏi (runner đặt) ─────────────────────────────────────
+_deadline: ContextVar[float] = ContextVar("_llm_deadline", default=float("inf"))
+
+
+@contextmanager
+def llm_deadline(seconds: float):
+    """Mọi lời gọi LLM trong khối này dừng khi hết `seconds`; caller rơi về fallback tất định."""
+    token = _deadline.set(time.monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
+
+
+def deadline_passed(_retry_state=None) -> bool:
+    """Hết hạn lượt hỏi chưa. Cũng dùng làm `stop` của tenacity: hết hạn thì thôi retry, khỏi ngủ backoff."""
+    return time.monotonic() >= _deadline.get()
+
+
+def _call_timeout(default: float) -> float:
+    """Timeout của một lời gọi, kẹp theo thời gian còn lại của lượt hỏi."""
+    return max(1.0, min(default, _deadline.get() - time.monotonic()))
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +102,7 @@ class GeminiLLMClient:
         )
         with usage.track(self.model_name) as call:
             # Không có timeout, SDK từng treo ~130s mà không ném lỗi → failover không kích hoạt.
-            resp = model.generate_content(prompt, request_options={"timeout": 30})
+            resp = model.generate_content(prompt, request_options={"timeout": _call_timeout(30)})
             meta = getattr(resp, "usage_metadata", None)
             if meta is not None:
                 call.prompt_tokens = getattr(meta, "prompt_token_count", 0) or 0
@@ -149,7 +175,7 @@ class OpenRouterLLMClient:
                 f"{self.BASE_URL}/chat/completions",
                 headers=self.headers,
                 json=payload,
-                timeout=60,
+                timeout=_call_timeout(60),
             )
             resp.raise_for_status()
             body = resp.json()
@@ -178,6 +204,18 @@ Chuyển số liệu thành brief điều hành ngắn. Viết tiếng Việt.""
 
 _ProviderSpec = tuple[str, Callable[[], object]]
 
+COOLDOWN_SECONDS = 60
+_COOLDOWN_STATUSES = {429, 503}
+
+
+def _status_code(exc: Exception) -> int | None:
+    """HTTP status của lỗi provider: requests.HTTPError (.response) hoặc google.api_core (.code)."""
+    code = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "code", None)
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
 
 class FailoverLLMClient:
     """
@@ -195,6 +233,8 @@ class FailoverLLMClient:
         self._specs = specs
         self._clients: dict[str, object] = {}
         self._dead: set[str] = set()
+        # Provider vừa trả 429/503 thì nghỉ, không tốn thêm round-trip vào nó.
+        self._cooldown_until: dict[str, float] = {}
         self.last_provider: str | None = None
 
     @property
@@ -203,7 +243,7 @@ class FailoverLLMClient:
 
     def _iter_clients(self):
         for name, factory in self._specs:
-            if name in self._dead:
+            if name in self._dead or time.monotonic() < self._cooldown_until.get(name, 0):
                 continue
             client = self._clients.get(name)
             if client is None:
@@ -219,6 +259,9 @@ class FailoverLLMClient:
     def _call(self, method: str, *args, **kwargs):
         errors: list[str] = []
         for name, client in self._iter_clients():
+            if deadline_passed():
+                errors.append("hết hạn lượt hỏi")
+                break
             try:
                 out = getattr(client, method)(*args, **kwargs)
                 self.last_provider = name
@@ -229,6 +272,8 @@ class FailoverLLMClient:
                 _log.warning("llm: provider %r failed on %s (%s: %s) — trying next",
                              name, method, type(exc).__name__, exc)
                 errors.append(f"{name}: {exc}")
+                if _status_code(exc) in _COOLDOWN_STATUSES:
+                    self._cooldown_until[name] = time.monotonic() + COOLDOWN_SECONDS
         raise RuntimeError(
             f"Tất cả LLM provider đều lỗi cho {method}() [{'; '.join(errors) or 'không có provider khả dụng'}]"
         )

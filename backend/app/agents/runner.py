@@ -7,9 +7,13 @@ from typing import Any, AsyncIterator
 from backend.app.agents.graph import agent_graph
 from backend.app.agents.state import AgentState
 from backend.app.services import usage
+from backend.app.services.llm_service import llm_deadline
 
 _log = logging.getLogger(__name__)
 
+
+# Hạn chót cả lượt hỏi: hết hạn thì mọi lời gọi LLM dừng, các node rơi về fallback tất định.
+AGENT_DEADLINE_S = 45
 
 _DETERMINISTIC_TAGS = {"[needs_cogs]", "[data_summary:shop]", "[data_summary:deterministic]", "[bot_info:shop]", "[unclear]", "[no_rows]"}
 
@@ -65,7 +69,7 @@ def run(
     }
 
     _log.info("agent.run: session=%s question=%r", session_id, question[:60])
-    with usage.capture() as llm_calls:
+    with usage.capture() as llm_calls, llm_deadline(AGENT_DEADLINE_S):
         final_state: AgentState = agent_graph.invoke(initial_state)
     call_stats = usage.summarize(llm_calls)
 
@@ -117,7 +121,7 @@ async def stream_answer(
     final_state: AgentState = initial_state
 
     # Stream node completion events as graph runs
-    with usage.capture() as llm_calls:
+    with usage.capture() as llm_calls, llm_deadline(AGENT_DEADLINE_S):
         async for event in agent_graph.astream(initial_state):
             for node_name, node_state in event.items():
                 final_state = {**final_state, **node_state}

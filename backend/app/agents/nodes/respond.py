@@ -3,12 +3,12 @@ from __future__ import annotations
 import logging
 import time
 
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, stop_any, wait_exponential
 
 from backend.app.agents.state import AgentState
 from backend.app.services import usage
 from backend.app.services.ecommerce_semantic import shop_summary
-from backend.app.services.llm_service import get_llm_client
+from backend.app.services.llm_service import deadline_passed, get_llm_client
 from backend.app.services.query_classifier import BOT_INFO_RESPONSE, OFF_TOPIC_RESPONSE
 from backend.app.services.storage import session_store
 
@@ -24,7 +24,7 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 @retry(
-    stop=stop_after_attempt(3),
+    stop=stop_any(stop_after_attempt(3), deadline_passed),
     wait=wait_exponential(multiplier=1, min=1, max=8),
     retry=retry_if_exception(_is_retryable),
     reraise=True,

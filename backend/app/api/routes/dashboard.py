@@ -8,8 +8,6 @@ Flow:
   → backend executes each spec item via execute_plan()
   → returns generic KPICard + ChartSpec list
 """
-from __future__ import annotations
-
 import json
 import logging
 import time
@@ -18,10 +16,12 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from backend.app.api.deps import get_current_user, get_session
+from backend.app.api.deps import RATE_LIMIT, get_current_user, get_session, limiter
 from backend.app.schemas import ChartSpec, DashboardResponse, KPICard
+from backend.app.agents.runner import AGENT_DEADLINE_S
+from backend.app.services.llm_service import llm_deadline
 from backend.app.services.planner.execute import execute_plan
 from backend.app.services.ecommerce_semantic import METRICS, cogs_gap, fmt_num, fmt_pct, seller_questions
 from backend.app.services.storage import DatasetSession
@@ -371,7 +371,9 @@ def _seller_kpis(df: pd.DataFrame) -> list[KPICard]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/api/dashboard/{session_id}", response_model=DashboardResponse)
+@limiter.limit(RATE_LIMIT)
 def get_dashboard(
+    request: Request,
     session_id: str,
     _session: DatasetSession = Depends(get_session),
     _user: dict = Depends(get_current_user),
@@ -403,7 +405,8 @@ def get_dashboard(
     t0 = time.perf_counter()
     try:
         if not seller:
-            spec = _call_llm_for_spec(_build_llm_prompt(df, profile, filename, col_map))
+            with llm_deadline(AGENT_DEADLINE_S):
+                spec = _call_llm_for_spec(_build_llm_prompt(df, profile, filename, col_map))
             _log.info(
                 "dashboard: LLM spec done in %.2fs domain=%r session=%s",
                 time.perf_counter() - t0, spec.get("domain"), session_id,
