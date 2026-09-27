@@ -6,6 +6,13 @@
   Docs được README link tới (EVALUATION, ENGINEERING, eval-baseline) thì vẫn commit bình thường.
 - Bài học lặp lại hoặc dễ tái phạm → rút thêm thành 1 dòng quy tắc trong CLAUDE.md.
 
+## Nhiều session Claude cùng repo
+
+- Trước mọi lệnh đổi trạng thái git (switch/checkout/reset/stash): `git status -sb` + `ListAgents`. Có session khác đang
+  busy trong cùng thư mục → làm trong `git worktree add` riêng, không đổi nhánh của thư mục chung.
+- Dừng server/tiến trình mình bật: chỉ kill process đang listen đúng port của mình. KHÔNG `taskkill /IM python.exe`
+  (hay lọc theo tên) — giết luôn tiến trình của session khác.
+
 ## Lessons — Deploy Errors (2026-05-26)
 
 ### Khi edit config deploy, phải trace flow thực thi end-to-end trước khi confirm xong
