@@ -10,9 +10,13 @@ router = APIRouter()
 
 
 @router.get("/api/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
+    """Liveness probe (Render healthCheckPath): async and no I/O on purpose.
+    A sync route shares the 40-slot threadpool with /api/chat; hung LLM calls
+    used to fill it, the probe timed out and Render restarted the container.
+    `sessions` = sessions cached in this process, not a DB count."""
     return HealthResponse(
         status="ok",
-        sessions=session_store.count(),
+        sessions=len(session_store._sessions),
         llm_provider=get_active_provider(),
     )
