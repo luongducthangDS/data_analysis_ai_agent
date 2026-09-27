@@ -42,14 +42,16 @@ REPORT_TEMPLATE = """# Data Analysis Report
 """
 
 
-def write_markdown_report(answer: str, profile: dict[str, Any], charts: list[dict[str, Any]]) -> tuple[str, Path]:
+def write_markdown_report(
+    answer: str, profile: dict[str, Any], charts: list[dict[str, Any]], session_id: str
+) -> tuple[str, Path]:
     report_id = uuid.uuid4().hex
     path = REPORT_DIR / f"{report_id}.md"
     rendered = Template(REPORT_TEMPLATE).render(answer=answer, profile=profile, charts=charts)
     path.write_text(rendered, encoding="utf-8")
     try:
         with db_session() as db:
-            db.add(ReportModel(report_id=report_id, content=rendered))
+            db.add(ReportModel(report_id=report_id, session_id=session_id, content=rendered))
     except Exception as exc:  # disk copy still serves the download
         logging.getLogger(__name__).warning("report DB write failed (%s): %s", type(exc).__name__, exc)
     return report_id, path

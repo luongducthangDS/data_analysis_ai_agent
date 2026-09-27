@@ -33,7 +33,7 @@ def _persist_and_report(session: DatasetSession, question: str, answer: str, cha
         ])
         profile = session.profile or build_profile(session.dataframe)
         session.profile = profile
-        report_id, _ = write_markdown_report(answer, profile, charts)
+        report_id, _ = write_markdown_report(answer, profile, charts, session.session_id)
         session.report_id = report_id
         session_store.save(session)
         return report_id

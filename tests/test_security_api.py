@@ -81,3 +81,24 @@ def test_owner_can_stream_and_turn_is_persisted(client, auth_on, sample_csv_byte
 
     from backend.app.services.storage import session_store
     assert session_store.get(sid).history[-1]["content"] == "Xong."
+
+
+def _report_for(session_id: str) -> str:
+    from backend.app.services.reports import write_markdown_report
+    profile = {"rows": 1, "columns": 1, "column_types": {}, "missing_values": {}}
+    report_id, _ = write_markdown_report("Doanh thu bí mật.", profile, [], session_id)
+    return report_id
+
+
+def test_report_of_someone_elses_session_is_forbidden(client, auth_on, sample_csv_bytes):
+    up = client.post("/api/upload", headers={"X-API-Key": KEY_A},
+                     files=[("files", ("d.csv", sample_csv_bytes, "text/csv"))])
+    report_id = _report_for(up.json()["session_id"])
+
+    assert client.get(f"/api/report/{report_id}", headers={"X-API-Key": KEY_B}).status_code == 403
+    own = client.get(f"/api/report/{report_id}", headers={"X-API-Key": KEY_A})
+    assert own.status_code == 200 and "Doanh thu bí mật." in own.text
+
+
+def test_report_without_a_live_session_is_404(client):
+    assert client.get(f"/api/report/{_report_for('no-such-session')}").status_code == 404

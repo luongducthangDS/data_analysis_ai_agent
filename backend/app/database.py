@@ -100,6 +100,9 @@ class ReportModel(Base):
     __tablename__ = "reports"
 
     report_id = Column(String(64), primary_key=True)
+    # Owner check + cleanup go through the session. ponytail: no FK / index on
+    # tables that already exist (init_db only ADDs the column) — reports is small.
+    session_id = Column(String(64), nullable=True, index=True)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 

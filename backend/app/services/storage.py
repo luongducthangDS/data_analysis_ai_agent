@@ -339,6 +339,9 @@ class SessionStore:
                 report_id = row.report_id
                 if report_id and (report := db.get(ReportModel, report_id)):
                     db.delete(report)
+                # Every turn writes a report; before session_id existed only the
+                # last one was deleted and the rest stayed in the DB forever.
+                db.query(ReportModel).filter(ReportModel.session_id == session_id).delete()
                 db.delete(row)
 
         # Disk is only a cache; a leftover file is harmless, so just log it.

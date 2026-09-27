@@ -143,8 +143,9 @@ def test_restore_after_disk_wiped_uses_db_copy():
 
 def test_report_download_falls_back_to_db(client):
     from backend.app.services.reports import write_markdown_report
+    sid = client.post("/api/upload", files=[("files", ("r.csv", make_csv_bytes(), "text/csv"))]).json()["session_id"]
     report_id, path = write_markdown_report("Saved in DB.", {"rows": 1, "columns": 1,
-        "column_types": {}, "missing_values": {}}, [])
+        "column_types": {}, "missing_values": {}}, [], sid)
     path.unlink()
     resp = client.get(f"/api/report/{report_id}")
     assert resp.status_code == 200
@@ -219,3 +220,15 @@ def test_coerce_datetime_text_column_stays():
     df = pd.DataFrame({"name": ["Alice", "Bob", "Charlie"]})
     result = SessionStore._coerce_datetime_columns(df)
     assert result["name"].dtype == object
+
+
+def test_delete_session_removes_every_report_of_that_session(client):
+    from backend.app.database import ReportModel, db_session
+    from backend.app.services.reports import write_markdown_report
+    sid = client.post("/api/upload", files=[("files", ("r.csv", make_csv_bytes(), "text/csv"))]).json()["session_id"]
+    profile = {"rows": 1, "columns": 1, "column_types": {}, "missing_values": {}}
+    ids = [write_markdown_report(f"turn {i}", profile, [], sid)[0] for i in range(3)]
+
+    assert client.delete(f"/api/session/{sid}").status_code == 204
+    with db_session() as db:
+        assert db.query(ReportModel).filter(ReportModel.report_id.in_(ids)).count() == 0

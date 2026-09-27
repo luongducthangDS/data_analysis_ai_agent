@@ -123,13 +123,13 @@ def test_execute_plan_profile_returns_dataframe():
 def test_write_markdown_report_creates_file():
     from backend.app.services.storage import REPORT_DIR
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    _, path = write_markdown_report("Test answer.", _make_profile(), [])
+    _, path = write_markdown_report("Test answer.", _make_profile(), [], "s")
     assert isinstance(path, Path) and path.exists()
 
 def test_write_markdown_report_returns_report_id():
     from backend.app.services.storage import REPORT_DIR
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    report_id, _ = write_markdown_report("Answer.", _make_profile(), [])
+    report_id, _ = write_markdown_report("Answer.", _make_profile(), [], "s")
     assert isinstance(report_id, str) and len(report_id) > 0
 
 
