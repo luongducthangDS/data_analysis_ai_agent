@@ -1,14 +1,16 @@
-fastapi==0.111.0
+fastapi==0.141.1
+# Pinned on its own: FastAPI allows any starlette>=0.46; <1.3.1 has known CVEs.
+starlette==1.7.0
 uvicorn[standard]==0.30.1
-python-multipart==0.0.9
-pydantic==2.7.1
+python-multipart==0.0.32
+pydantic==2.13.5
 pydantic-settings==2.3.4
 pandas==2.2.2
 openpyxl==3.1.2
 plotly==5.22.0
-jinja2==3.1.4
-python-dotenv==1.0.1
-requests==2.31.0
+jinja2==3.1.6
+python-dotenv==1.2.3
+requests==2.34.2
 
 # Agent orchestration
 langgraph==0.2.28
