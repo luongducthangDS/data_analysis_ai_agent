@@ -30,6 +30,7 @@ _CURRENCY_RE = re.compile(f"[{re.escape(_CURRENCY_CHARS)}]")
 _DOT_THOUSANDS_RE = re.compile(r"[+-]?\d{1,3}(\.\d{3})+")
 _LETTER_RE = re.compile(r"[A-Za-zÀ-ỹ]")
 _PLAIN_NUMBER_RE = re.compile(r"[+-]?\d*\.?\d+")
+_MAX_NUMBER_LEN = 40
 
 
 def parse_number(value: object) -> float | None:
@@ -44,6 +45,9 @@ def parse_number(value: object) -> float | None:
         return float(value)
 
     text = str(value).strip().replace(" ", " ")
+    # Số thật không dài quá 40 ký tự; chuỗi dài hơn làm _PLAIN_NUMBER_RE chạy O(n²) và treo cả process (T01).
+    if len(text) > _MAX_NUMBER_LEN:
+        return None
     if text.lower() in _BLANK_TOKENS:
         return None
 
