@@ -6,7 +6,7 @@ Trước đây: dấu bị bỏ (abs) → "lãi TĂNG" khi Δ âm vẫn qua; ph�
 import pandas as pd
 import pytest
 
-from backend.app.agents.nodes.synthesize import _numbers_grounded
+from backend.app.agents.nodes.synthesize import _is_valid_synthesis, _numbers_grounded
 
 BRIDGE = pd.DataFrame({"hang_muc": ["Lãi trước QC", "Tỷ lệ phí sàn"],
                        "anh_huong_lai": [-11567470.0, None], "ty_le": [None, 0.335]})
@@ -56,6 +56,27 @@ def test_difference_between_two_values_is_derivable():
     assert _numbers_grounded("Lợi nhuận tháng 5 tăng 10 triệu so với tháng 4.", MONTHS) is False
     assert _numbers_grounded("Lợi nhuận tháng 5 tăng 11,1% so với tháng 4.", MONTHS) is False
     assert _numbers_grounded("Tháng 4 lợi nhuận cao hơn tháng 5 11,1%.", MONTHS) is True   # không nói chiều lãi
+
+
+def test_percentage_point_gap_between_ratios_is_derivable():
+    # eval_seller #6: "TikTok cao hơn 0,02%" = 34,52% − 34,50%.
+    fees = pd.DataFrame({"kenh": ["TikTok Shop", "Shopee"], "ty_le_phi_san": [0.3452, 0.3450]})
+    assert _numbers_grounded("Tỷ lệ phí sàn TikTok Shop cao hơn Shopee 0,02%.", fees) is True
+    assert _numbers_grounded("Tỷ lệ phí sàn TikTok Shop cao hơn Shopee 0,5%.", fees) is False
+
+
+@pytest.mark.parametrize("answer", [
+    # eval_seller #23–25 khi hết quota: gemini-3.8-flash trả câu bị cắt ở max_tokens.
+    "Tổng doanh thu thuần của shop ghi nhận cao nhất ở kênh Shopee với 1.63",
+    "Tổng lãi trước quảng cáo theo từng tháng của anh/chị ghi nhận như sau:\n\n-",
+    "Hiện tại không tìm thấy dữ liệu phù hợp để xác định SKU nào",
+])
+def test_truncated_llm_answer_is_invalid(answer):
+    assert _is_valid_synthesis(answer) is False
+
+
+def test_complete_answer_is_valid():
+    assert _is_valid_synthesis("Doanh thu thuần kênh Shopee là 1.632.490.000 đ, TikTok Shop là 942.487.000 đ.") is True
 
 
 def test_numbers_quoted_from_the_question_are_allowed():

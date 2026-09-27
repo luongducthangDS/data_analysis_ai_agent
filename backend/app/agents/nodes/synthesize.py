@@ -50,11 +50,18 @@ class _Claim:
     sign: int      # +1 "lãi tăng", -1 "lãi giảm/âm", "lỗ", "-5.000"; 0 = không nói chiều
 
 
+# Câu trả lời bị cắt ở max_tokens vẫn dài hơn 50 ký tự: khi hết quota flash-lite, gemini-3.8-flash
+# (tiêu token cho phần suy nghĩ) trả "… kênh Shopee với 1.63" và nó hiển thị như câu trả lời bình thường.
+_COMPLETE_ENDINGS = (".", "!", "?", "…", ")", '"', "”", "»")
+
+
 def _is_valid_synthesis(answer: str) -> bool:
     stripped = answer.strip()
     if len(stripped) < 50:
         return False
     if stripped.lower().startswith(_BAD_STARTS):
+        return False
+    if not stripped.rstrip("*_ ").endswith(_COMPLETE_ENDINGS):
         return False
     return True
 
@@ -115,7 +122,7 @@ def _allowed_values(result_df) -> list[float]:
 def _derived_values(result_df) -> dict[str, list[float]]:
     """Figures derivable from the table, beyond raw cells:
       percents: ratio cells (0.335 or 33.5) and shares of a column total;
-      forward:  later − earlier (and % change) between two values of one column or one
+      forward:  later − earlier (and its % change / percentage-point gap) between two values of one column or one
                 row, in table order — time series ascend, bridge columns go T4 → T5;
       backward: the same pairs the other way round.
     A claim with a profit direction may only use `forward`: "lãi tăng 10 triệu" must
@@ -139,6 +146,7 @@ def _derived_values(result_df) -> dict[str, list[float]]:
                     continue
                 key = "forward" if j > i else "backward"
                 out[key].append(b - a)
+                out[key + "_pct"].append((b - a) * 100)   # chênh điểm %: 0,3452 − 0,3450 → "0,02%"
                 if a:
                     out[key + "_pct"].append((b - a) / abs(a) * 100)
     return out
