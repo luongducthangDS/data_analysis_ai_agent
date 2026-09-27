@@ -270,3 +270,50 @@ def test_cache_counts_a_frame_shared_by_dataframe_and_sheets_once():
     session = store.create("a.csv", _big_csv())
     assert session.dataframe is next(iter(session.sheets.values()))
     assert store._nbytes[session.session_id] == int(session.dataframe.memory_usage(deep=True).sum())
+
+
+# ── Shop mẫu không ghi blob; restore không giữ connection khi parse (P0 RF3) ──
+
+def _file_rows(session_id: str) -> int:
+    from backend.app.database import SessionFileModel, db_session
+    with db_session() as db:
+        return db.query(SessionFileModel).filter_by(session_id=session_id).count()
+
+
+def test_sample_shop_stores_no_file_bytes_in_db(client):
+    sid = client.post("/api/sample-shop").json()["session_id"]
+    assert _file_rows(sid) == 0
+
+
+def test_sample_shop_session_restores_from_the_static_files(client):
+    from backend.app.services.storage import session_store
+    sid = client.post("/api/sample-shop").json()["session_id"]
+    before = session_store.get(sid)
+    rows, columns = len(before.dataframe), list(before.dataframe.columns)
+
+    for f in UPLOAD_DIR.glob(f"{sid}_*"):          # đĩa Render bị xoá khi restart
+        f.unlink()
+    session_store._forget(sid)
+
+    after = session_store.get(sid)
+    assert (len(after.dataframe), list(after.dataframe.columns)) == (rows, columns)
+    assert list(after.sheets) == list(before.sheets)
+
+
+def test_restore_releases_the_db_connection_before_parsing(monkeypatch):
+    from backend.app.database import engine
+    from backend.app.services import storage
+    store = _fresh_store()
+    sid = store.create("r.csv", make_csv_bytes()).session_id
+    store._forget(sid)
+
+    seen: list[int] = []
+    real = storage.read_csv_bytes
+
+    def spy(content):
+        seen.append(engine.pool.checkedout())
+        return real(content)
+
+    monkeypatch.setattr(storage, "read_csv_bytes", spy)
+    store.get(sid)
+    assert seen == [0], f"parse ran while holding {seen} DB connection(s)"

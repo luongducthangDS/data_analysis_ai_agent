@@ -41,6 +41,9 @@ class SessionModel(Base):
     ecommerce_col_map = Column(JSON, nullable=True, default=None)
     detected_platform = Column(String(32), nullable=True, default=None)
     active_sheet = Column(String(255), nullable=True, default=None)
+    # Built-in sample dataset (key of storage.SAMPLE_SETS): files are read from the
+    # repo, not stored in session_files — 1.8 MB per click was filling the free DB.
+    sample_set = Column(String(32), nullable=True, default=None)
     # Legacy: whole history as one JSON blob, rewritten on every save → lost
     # updates with >1 worker. Now read-only fallback; new turns go to chat_history.
     chat_log = Column(JSON, nullable=True, default=None)

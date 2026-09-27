@@ -9,7 +9,7 @@ from backend.app.core.auth import get_current_user
 from backend.app.schemas import ImportUrlRequest, UploadResponse
 from backend.app.services.ecommerce_semantic import cogs_gap, seller_notes, seller_questions
 from backend.app.services.profiler import build_profile
-from backend.app.services.storage import session_store
+from backend.app.services.storage import sample_uploads, session_store
 from backend.app.services.workspace_connectors import fetch_from_url
 
 _log = logging.getLogger(__name__)
@@ -60,12 +60,14 @@ def _generate_suggested_queries(df, profile: dict) -> list[str]:
     return suggestions[:8]
 
 
-def _create_session_or_http_error(uploads: list[tuple[str, bytes]], owner_id: str) -> UploadResponse:
+def _create_session_or_http_error(
+    uploads: list[tuple[str, bytes]], owner_id: str, sample_set: str | None = None
+) -> UploadResponse:
     """Map failures to status codes without leaking internals: ValueError is our
     (or pandas') message about the file itself → 400 as-is; a DB failure → 503;
     anything else is logged and gets a generic 400."""
     try:
-        return _build_upload_response(uploads, owner_id=owner_id)
+        return _build_upload_response(uploads, owner_id=owner_id, sample_set=sample_set)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
@@ -76,8 +78,10 @@ def _create_session_or_http_error(uploads: list[tuple[str, bytes]], owner_id: st
         raise HTTPException(status_code=400, detail="Không đọc được file. Kiểm tra lại định dạng CSV/XLSX.") from exc
 
 
-def _build_upload_response(uploads: list[tuple[str, bytes]], owner_id: str = "") -> UploadResponse:
-    session = session_store.create_multiple(uploads, owner_id=owner_id)
+def _build_upload_response(
+    uploads: list[tuple[str, bytes]], owner_id: str = "", sample_set: str | None = None
+) -> UploadResponse:
+    session = session_store.create_multiple(uploads, owner_id=owner_id, sample_set=sample_set)
     profile = build_profile(session.dataframe)
     session.profile = profile
     session_store.save(session)
@@ -148,16 +152,13 @@ def upload_dataset(
     return _create_session_or_http_error(uploads, _user.get("user_id", ""))
 
 
-SAMPLE_SHOP = Path(__file__).resolve().parents[4] / "data" / "samples" / "shop_lan"
-SAMPLE_FILES = ("export_shopee.csv", "export_tiktok.csv", "products.csv", "ads_daily.csv")
 
 
 @router.post("/api/sample-shop", response_model=UploadResponse)
 @limiter.limit(RATE_LIMIT)
 def load_sample_shop(request: Request, _user: dict = Depends(get_current_user)) -> UploadResponse:
     """Nút "Dùng thử với shop mẫu": nạp bộ dữ liệu MÔ PHỎNG shop Chị Lan (2 file export + giá vốn + quảng cáo)."""
-    uploads = [(name, (SAMPLE_SHOP / name).read_bytes()) for name in SAMPLE_FILES]
-    return _create_session_or_http_error(uploads, _user.get("user_id", ""))
+    return _create_session_or_http_error(sample_uploads("shop_lan"), _user.get("user_id", ""), sample_set="shop_lan")
 
 
 @router.post("/api/import-url", response_model=UploadResponse)

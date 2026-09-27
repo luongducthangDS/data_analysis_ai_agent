@@ -41,6 +41,17 @@ _CACHE_TTL_SECONDS = 24 * 3600
 
 _log = logging.getLogger(__name__)
 
+# Sample datasets shipped with the app (data/ is in the Docker image). A sample
+# session stores only the set's name; restore reads the files from here.
+SAMPLE_SETS = {"shop_lan": Path(__file__).resolve().parents[3] / "data" / "samples" / "shop_lan"}
+SAMPLE_FILES = {"shop_lan": ("export_shopee.csv", "export_tiktok.csv", "products.csv", "ads_daily.csv")}
+
+
+def sample_uploads(sample_set: str, names: list[str] | tuple[str, ...] | None = None) -> list[tuple[str, bytes]]:
+    """(name, bytes) of a sample set's files. Unknown set → KeyError (whitelist, no path from input)."""
+    folder = SAMPLE_SETS[sample_set]
+    return [(name, (folder / Path(name).name).read_bytes()) for name in (names or SAMPLE_FILES[sample_set])]
+
 
 def resolve_sheet_key(name: str, sheets: dict[str, pd.DataFrame]) -> str:
     """Resolve a user-supplied sheet name to a real key (exact, or by sheet part of 'file::sheet')."""
@@ -166,7 +177,9 @@ class SessionStore:
     def create(self, filename: str, content: bytes, owner_id: str = "") -> DatasetSession:
         return self.create_multiple([(filename, content)], owner_id=owner_id)
 
-    def create_multiple(self, uploads: list[tuple[str, bytes]], owner_id: str = "") -> DatasetSession:
+    def create_multiple(
+        self, uploads: list[tuple[str, bytes]], owner_id: str = "", sample_set: str | None = None
+    ) -> DatasetSession:
         session_id = uuid.uuid4().hex
         try:
             all_sheets, file_paths = self._build_sheets(session_id, uploads)
@@ -202,7 +215,7 @@ class SessionStore:
             active_sheet=active_sheet,
         )
         try:
-            self._insert_session(session, uploads)
+            self._insert_session(session, uploads, sample_set)
         except Exception:
             # Not durable = not created: a RAM-only session would vanish on restart.
             _remove_uploads(session_id)
@@ -425,7 +438,9 @@ class SessionStore:
             total -= self._nbytes.get(sid, 0)
             self._forget(sid)
 
-    def _insert_session(self, session: DatasetSession, uploads: list[tuple[str, bytes]]) -> None:
+    def _insert_session(
+        self, session: DatasetSession, uploads: list[tuple[str, bytes]], sample_set: str | None = None
+    ) -> None:
         with db_session() as db:
             db.add(SessionModel(
                 session_id=session.session_id,
@@ -439,7 +454,8 @@ class SessionStore:
                 ecommerce_col_map=session.ecommerce_col_map or None,
                 detected_platform=session.detected_platform,
                 active_sheet=session.active_sheet,
-                files=[
+                sample_set=sample_set,
+                files=[] if sample_set else [
                     SessionFileModel(name=Path(filename).name, content=content)
                     for filename, content in uploads
                 ],
@@ -449,41 +465,47 @@ class SessionStore:
         """Rebuild a session from the file bytes stored in the DB (in upload order,
         duplicate names kept) through the same _build_sheets as create.
         ponytail: sessions older than session_files (2026-09-24) are not restorable;
-        they expire within SESSION_TTL_DAYS."""
+        they expire within SESSION_TTL_DAYS.
+
+        Everything is copied out of the ORM row first: the pooled connection goes
+        back before pandas parses (it used to be held for the whole parse)."""
         with db_session() as db:
             row = db.get(SessionModel, session_id)
             if row is None:
                 raise KeyError(f"Unknown session_id: {session_id}")
-            if not row.files:
-                raise KeyError(f"No stored files for session: {session_id}")
-
-            file_names: list[str] = row.file_names or []
-            all_sheets, file_paths = self._build_sheets(session_id, [(f.name, f.content) for f in row.files])
-            analysis_df, active_sheet = self._resolve_active_dataframe(
-                all_sheets, active_sheet=getattr(row, "active_sheet", None)
-            )
+            sample_set = row.sample_set
+            blobs = [] if sample_set else [(f.name, f.content) for f in row.files]
+            persisted_active = row.active_sheet
             # Legacy blob (pre append-only) first, then the per-message rows.
             history = list(row.chat_log or []) + [self._message_dict(h) for h in row.history]
-
-            session = DatasetSession(
-                session_id=session_id,
+            meta = dict(
                 filename=row.filename,
-                file_path=file_paths[0],
-                dataframe=analysis_df,
                 profile=row.profile or {},
                 owner_id=row.owner_id or "",
                 report_id=row.report_id,
-                history=history,
-                file_names=file_names,
-                sheets=all_sheets,
+                file_names=list(row.file_names or []),
                 sheet_relationships=self._deserialize_relationships(row.sheet_relationships),
                 sheets_context=row.sheets_context or "",
                 ecommerce_col_map=row.ecommerce_col_map or {},
                 detected_platform=row.detected_platform,
-                active_sheet=active_sheet,
             )
-            self._remember(session)
-            return session
+
+        uploads = sample_uploads(sample_set, meta["file_names"]) if sample_set else blobs
+        if not uploads:
+            raise KeyError(f"No stored files for session: {session_id}")
+        all_sheets, file_paths = self._build_sheets(session_id, uploads)
+        analysis_df, active_sheet = self._resolve_active_dataframe(all_sheets, active_sheet=persisted_active)
+        session = DatasetSession(
+            session_id=session_id,
+            file_path=file_paths[0],
+            dataframe=analysis_df,
+            history=history,
+            sheets=all_sheets,
+            active_sheet=active_sheet,
+            **meta,
+        )
+        self._remember(session)
+        return session
 
     @staticmethod
     def _serialize_relationships(rels: list[SheetRelationship]) -> list[dict]:
