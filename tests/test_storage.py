@@ -138,7 +138,7 @@ def test_restore_after_disk_wiped_uses_db_copy():
     restored = store.get(session.session_id)
     assert len(restored.dataframe) == len(session.dataframe)
     assert restored.history[0]["source"] == "llm"
-    assert (UPLOAD_DIR / f"{session.session_id}_wiped.csv").exists()
+    assert (UPLOAD_DIR / f"{session.session_id}_0_wiped.csv").exists()
 
 
 def test_report_download_falls_back_to_db(client):

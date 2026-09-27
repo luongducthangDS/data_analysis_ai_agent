@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import logging
+import os
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -46,6 +49,58 @@ def resolve_sheet_key(name: str, sheets: dict[str, pd.DataFrame]) -> str:
     if len(matches) > 1:
         raise ValueError(f"Ambiguous sheet name '{name}'. Use one of: {', '.join(matches)}")
     raise ValueError(f"Unknown sheet name '{name}'.")
+
+
+def _upload_path(session_id: str, index: int, filename: str) -> Path:
+    """Disk cache path of the index-th upload. The index keeps two files with the
+    same name — or differing only by space/underscore or case — from overwriting each other."""
+    return UPLOAD_DIR / f"{session_id}_{index}_{Path(filename).name.replace(' ', '_')}"
+
+
+def _write_atomic(path: Path, content: bytes) -> None:
+    """Temp file + rename: two requests restoring the same session never read a half-written file."""
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_bytes(content)
+    os.replace(tmp, path)
+
+
+def _remove_uploads(session_id: str) -> None:
+    for f in UPLOAD_DIR.glob(f"{session_id}_*"):
+        f.unlink(missing_ok=True)
+
+
+def _unique_key(key: str, taken: dict) -> str:
+    """"orders" → "orders_1", "orders_2"… when the key is already taken."""
+    if key not in taken:
+        return key
+    i = 1
+    while f"{key}_{i}" in taken:
+        i += 1
+    return f"{key}_{i}"
+
+
+# Excel tiếng Việt trên Windows lưu CSV bằng cp1258; UTF-8 có BOM là "CSV UTF-8" của Excel.
+_CSV_ENCODINGS = ("utf-8-sig", "cp1258")
+
+
+def read_csv_bytes(content: bytes) -> pd.DataFrame:
+    """Read a CSV the way sellers actually send it: UTF-8 (with/without BOM) or
+    cp1258, precomposed or combining accents (Excel on Mac saves NFD), "," or ";"
+    delimiter (Excel in VN/EU locales). NFC before parsing so headers match
+    EXPORT_HEADERS and status values match whichever way they were typed."""
+    for encoding in _CSV_ENCODINGS:
+        try:
+            text = content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("Không đọc được bảng mã của file CSV — hãy lưu lại dạng \"CSV UTF-8\".")
+    text = unicodedata.normalize("NFC", text)
+    header = text.split("\n", 1)[0]
+    # ponytail: đoán theo dòng tiêu đề; tên cột chứa dấu ";" sẽ đoán nhầm — thêm csv.Sniffer khi gặp.
+    sep = ";" if header.count(";") > header.count(",") else ","
+    return pd.read_csv(io.StringIO(text), sep=sep)
 
 
 MAX_JOIN_ROWS = 2_000_000
@@ -109,47 +164,12 @@ class SessionStore:
 
     def create_multiple(self, uploads: list[tuple[str, bytes]], owner_id: str = "") -> DatasetSession:
         session_id = uuid.uuid4().hex
-        file_paths: list[Path] = []
-        all_sheets: dict[str, pd.DataFrame] = {}
-        file_names: list[str] = []
-
-        for filename, content in uploads:
-            safe_name = Path(filename).name.replace(" ", "_")
-            file_path = UPLOAD_DIR / f"{session_id}_{safe_name}"
-            file_path.write_bytes(content)
-            file_paths.append(file_path)
-            file_names.append(Path(filename).name)
-
-            suffix = file_path.suffix.lower()
-            if suffix == ".csv":
-                df = pd.read_csv(file_path)
-                df = self._normalize_frame(df)
-                sheet_key = Path(filename).stem
-                if sheet_key in all_sheets:
-                    suffix_index = 1
-                    while f"{sheet_key}_{suffix_index}" in all_sheets:
-                        suffix_index += 1
-                    sheet_key = f"{sheet_key}_{suffix_index}"
-                all_sheets[sheet_key] = df
-            elif suffix in {".xlsx", ".xls"}:
-                file_sheets = MultiSheetAnalyzer.read_all_sheets(str(file_path))
-                for sheet_name, df in file_sheets.items():
-                    df = self._normalize_frame(df)
-                    sheet_key = f"{Path(filename).stem}::{sheet_name}"
-                    if sheet_key in all_sheets:
-                        suffix_index = 1
-                        while f"{sheet_key}_{suffix_index}" in all_sheets:
-                            suffix_index += 1
-                        sheet_key = f"{sheet_key}_{suffix_index}"
-                    all_sheets[sheet_key] = df
-            else:
-                raise ValueError("Only CSV, XLSX, and XLS files are supported.")
-
-        if not all_sheets:
-            raise ValueError("No valid sheets found in upload.")
-
-        from backend.app.services.ecommerce_semantic import link_sheets
-        all_sheets = link_sheets(all_sheets)
+        try:
+            all_sheets, file_paths = self._build_sheets(session_id, uploads)
+        except Exception:
+            _remove_uploads(session_id)
+            raise
+        file_names = [Path(filename).name for filename, _ in uploads]
         analysis_df, active_sheet = self._resolve_active_dataframe(all_sheets)
         relationships: list[SheetRelationship] = []
         context = ""
@@ -181,12 +201,40 @@ class SessionStore:
             self._insert_session(session, uploads)
         except Exception:
             # Not durable = not created: a RAM-only session would vanish on restart.
-            for path in file_paths:
-                path.unlink(missing_ok=True)
+            _remove_uploads(session_id)
             raise
         self._sessions[session_id] = session
         self._last_accessed[session_id] = time.time()
         return session
+
+    def _build_sheets(
+        self, session_id: str, uploads: list[tuple[str, bytes]]
+    ) -> tuple[dict[str, pd.DataFrame], list[Path]]:
+        """Uploaded files → sheets. create and restore BOTH go through here, so a
+        restored session has the same sheet keys, order and data as at upload
+        (restore used to re-derive keys on its own and lost duplicate file names)."""
+        sheets: dict[str, pd.DataFrame] = {}
+        paths: list[Path] = []
+        for index, (filename, content) in enumerate(uploads):
+            path = _upload_path(session_id, index, filename)
+            if not path.exists():
+                _write_atomic(path, content)
+            paths.append(path)
+            stem, suffix = Path(filename).stem, Path(filename).suffix.lower()
+            if suffix == ".csv":
+                frames = {stem: read_csv_bytes(content)}
+            elif suffix in {".xlsx", ".xls"}:
+                frames = {f"{stem}::{name}": df
+                          for name, df in MultiSheetAnalyzer.read_all_sheets(str(path)).items()}
+            else:
+                raise ValueError("Only CSV, XLSX, and XLS files are supported.")
+            for key, df in frames.items():
+                sheets[_unique_key(key, sheets)] = self._normalize_frame(df)
+        if not sheets:
+            raise ValueError("No valid sheets found in upload.")
+
+        from backend.app.services.ecommerce_semantic import link_sheets
+        return link_sheets(sheets), paths
 
     def set_active_sheet(self, session: DatasetSession, sheet_key: str) -> DatasetSession:
         """
@@ -366,54 +414,29 @@ class SessionStore:
             ))
 
     def _restore_from_db(self, session_id: str) -> DatasetSession:
-        """Load a session from DB and reload its DataFrames from disk,
-        re-materialising files from the DB when the disk was wiped."""
+        """Rebuild a session from the file bytes stored in the DB (in upload order,
+        duplicate names kept) through the same _build_sheets as create.
+        ponytail: sessions older than session_files (2026-09-24) are not restorable;
+        they expire within SESSION_TTL_DAYS."""
         with db_session() as db:
             row = db.get(SessionModel, session_id)
             if row is None:
                 raise KeyError(f"Unknown session_id: {session_id}")
+            if not row.files:
+                raise KeyError(f"No stored files for session: {session_id}")
 
             file_names: list[str] = row.file_names or []
-            stored_files = {f.name: f.content for f in row.files}
-            all_sheets: dict[str, pd.DataFrame] = {}
-
-            for file_name in file_names:
-                safe_name = Path(file_name).name.replace(" ", "_")
-                file_path = UPLOAD_DIR / f"{session_id}_{safe_name}"
-                if not file_path.exists():
-                    content = stored_files.get(Path(file_name).name)
-                    if content is None:
-                        raise KeyError(f"Session file missing from disk and DB: {file_path}")
-                    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-                    file_path.write_bytes(content)
-
-                suffix = file_path.suffix.lower()
-                if suffix == ".csv":
-                    df = self._normalize_frame(pd.read_csv(file_path))
-                    all_sheets[Path(file_name).stem] = df
-                elif suffix in {".xlsx", ".xls"}:
-                    for sheet_name, df in MultiSheetAnalyzer.read_all_sheets(str(file_path)).items():
-                        all_sheets[f"{Path(file_name).stem}::{sheet_name}"] = self._normalize_frame(df)
-
-            if not all_sheets:
-                raise KeyError(f"No files could be loaded for session: {session_id}")
-
-            from backend.app.services.ecommerce_semantic import link_sheets
-            all_sheets = link_sheets(all_sheets)
+            all_sheets, file_paths = self._build_sheets(session_id, [(f.name, f.content) for f in row.files])
             analysis_df, active_sheet = self._resolve_active_dataframe(
                 all_sheets, active_sheet=getattr(row, "active_sheet", None)
             )
             # Legacy blob (pre append-only) first, then the per-message rows.
             history = list(row.chat_log or []) + [self._message_dict(h) for h in row.history]
-            file_path_first = (
-                UPLOAD_DIR / f"{session_id}_{Path(file_names[0]).name.replace(' ', '_')}"
-                if file_names else None
-            )
 
             session = DatasetSession(
                 session_id=session_id,
                 filename=row.filename,
-                file_path=file_path_first,
+                file_path=file_paths[0],
                 dataframe=analysis_df,
                 profile=row.profile or {},
                 owner_id=row.owner_id or "",
@@ -516,7 +539,7 @@ class SessionStore:
     def _read_dataframe(file_path: Path) -> pd.DataFrame:
         suffix = file_path.suffix.lower()
         if suffix == ".csv":
-            return SessionStore._normalize_frame(pd.read_csv(file_path))
+            return SessionStore._normalize_frame(read_csv_bytes(file_path.read_bytes()))
         if suffix in {".xlsx", ".xls"}:
             return SessionStore._normalize_frame(pd.read_excel(file_path))
         raise ValueError("Only CSV, XLSX, and XLS files are supported.")
