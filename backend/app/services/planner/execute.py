@@ -10,7 +10,7 @@ import pandas as pd
 from backend.app.services.ecommerce_semantic import (
     BRIDGE_REQUIRED, profit_bridge,
 )
-from backend.app.services.numeric_parse import parse_numeric_series
+from backend.app.services.numeric_parse import parse_number, parse_numeric_series
 from backend.app.services.security import LITERAL_CONTAINS
 
 
@@ -25,9 +25,15 @@ ALLOWED_DERIVED_OPS = {
     "date",
 }
 ALLOWED_FILTER_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "contains"}
+ALLOWED_GRAINS = {"date", "month", "quarter", "year"}
 # Trần số dòng trả về. Kết quả còn phải đi qua LLM synthesis nên limit khổng lồ
 # vừa phình payload vừa phình token — chặn ngay ở tầng validate.
 MAX_PLAN_LIMIT = 10_000
+
+
+class PlanValidationError(ValueError):
+    """Plan sai cấu trúc hoặc sai kiểu. Là ValueError nên plan_node vẫn rơi xuống plan rule-based,
+    nhưng lỗi được chặn ở validate thay vì chạy ra 0 dòng, mất metric hay nhãn sai."""
 
 
 def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
@@ -52,20 +58,41 @@ def execute_plan(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
         return _execute_distribution(work, plan)
     if action == "profit_bridge":
         return profit_bridge(work, plan)
-    raise ValueError(f"Unsupported action: {action}")
+    raise PlanValidationError(f"Unsupported action: {action}")
 
 
 def _validate_plan_shape(plan: dict[str, Any]) -> None:
     if not isinstance(plan, dict):
-        raise ValueError("Plan must be a JSON object.")
+        raise PlanValidationError("Plan must be a JSON object.")
     action = plan.get("action")
     if action not in ALLOWED_ACTIONS:
-        raise ValueError(f"Unsupported or missing action: {action}")
+        raise PlanValidationError(f"Unsupported or missing action: {action}")
     limit = int(plan.get("limit", 100) or 100)
     if limit < 1:
-        raise ValueError("limit must be positive.")
+        raise PlanValidationError("limit must be positive.")
     if limit > MAX_PLAN_LIMIT:
-        raise ValueError(f"limit vượt trần cho phép ({MAX_PLAN_LIMIT}).")
+        raise PlanValidationError(f"limit vượt trần cho phép ({MAX_PLAN_LIMIT}).")
+    if action == "time_series" and plan.get("grain", "month") not in ALLOWED_GRAINS:
+        # "week" từng chạy ra nhóm theo THÁNG mà cột kết quả ghi "week".
+        raise PlanValidationError(f"grain phải thuộc {sorted(ALLOWED_GRAINS)}, nhận {plan.get('grain')!r}.")
+    _check_output_columns(plan)
+
+
+def _check_output_columns(plan: dict[str, Any]) -> None:
+    """Mỗi cột kết quả một tên. Hai metric trùng tên sau `_safe_column` ("Lãi %" và "Lãi")
+    thì groupby.agg giữ một, bỏ một, không báo gì; trùng cột nhóm/cột kỳ thì pandas vỡ."""
+    action = plan.get("action")
+    if action not in {"aggregate", "compare_metrics", "time_series"}:
+        return
+    keys = [plan.get("grain", "month")] if action == "time_series" else list(plan.get("group_by") or [])
+    seen = {_safe_column(str(k)) for k in keys}
+    labels = [_metric_label(m) for m in plan.get("metrics") or [] if isinstance(m, dict)]
+    labels += [r.get("label") for r in plan.get("ratios") or [] if isinstance(r, dict)]
+    for label in labels:
+        safe = _safe_column(str(label))
+        if safe in seen:
+            raise PlanValidationError(f"Tên cột kết quả bị trùng: {label!r}.")
+        seen.add(safe)
 
 
 def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> None:
@@ -74,14 +101,19 @@ def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> 
     for derived in plan.get("derived_columns", []) or []:
         op = derived.get("operation")
         if op not in ALLOWED_DERIVED_OPS:
-            raise ValueError(f"Unsupported derived operation: {op}")
+            raise PlanValidationError(f"Unsupported derived operation: {op}")
         _validate_derived_sources(known, derived)
         known.add(derived["name"])
 
     for item in plan.get("filters", []) or []:
         _require_column(known, item.get("column"))
-        if item.get("operator") not in ALLOWED_FILTER_OPERATORS:
-            raise ValueError(f"Unsupported filter operator: {item.get('operator')}")
+        op, value = item.get("operator"), item.get("value")
+        if op not in ALLOWED_FILTER_OPERATORS:
+            raise PlanValidationError(f"Unsupported filter operator: {op}")
+        if op == "between" and not (isinstance(value, list) and len(value) == 2):
+            raise PlanValidationError("between cần đúng 2 giá trị [từ, đến].")
+        if item["column"] in df.columns:   # cột dẫn xuất chưa có kiểu lúc validate
+            _coerce_filter_value(df[item["column"]], value, op)
     for col in plan.get("group_by", []) or []:
         _require_column(known, col)
     if plan.get("time_column"):
@@ -96,23 +128,23 @@ def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> 
             isinstance(periods, list) and len(periods) == 2
             and all(isinstance(p, list) and len(p) == 2 and all(_is_date_only(d) for d in p) for p in periods)
         ):
-            raise ValueError("profit_bridge.periods phải là [[từ, đến], [từ, đến]] dạng YYYY-MM-DD.")
+            raise PlanValidationError("profit_bridge.periods phải là [[từ, đến], [từ, đến]] dạng YYYY-MM-DD.")
     for metric in plan.get("metrics", []) or []:
         _require_column(known, metric.get("column"))
         if metric.get("aggregation", "sum") not in ALLOWED_AGGREGATIONS:
-            raise ValueError(f"Unsupported aggregation: {metric.get('aggregation')}")
+            raise PlanValidationError(f"Unsupported aggregation: {metric.get('aggregation')}")
     labels = {_metric_label(m) for m in plan.get("metrics", []) or []}
     for ratio in plan.get("ratios", []) or []:
         if not isinstance(ratio, dict) or not ratio.get("label"):
-            raise ValueError("ratio cần label, numerator, denominator.")
+            raise PlanValidationError("ratio cần label, numerator, denominator.")
         for key in ("numerator", "denominator"):
             if ratio.get(key) not in labels:
-                raise ValueError(f"ratio.{key} phải là label của một metric trong plan: {ratio.get(key)}")
+                raise PlanValidationError(f"ratio.{key} phải là label của một metric trong plan: {ratio.get(key)}")
 
 
 def _validate_derived_sources(known: set[str], derived: dict[str, Any]) -> None:
     if not derived.get("name"):
-        raise ValueError("Derived column needs a name.")
+        raise PlanValidationError("Derived column needs a name.")
     op = derived.get("operation")
     if op == "multiply":
         for col in derived.get("columns", []):
@@ -159,17 +191,9 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
         col = item["column"]
         op = item["operator"]
         value = item.get("value")
-        series = df[col]
-        is_dt = pd.api.types.is_datetime64_any_dtype(series)
-        if is_dt:
-            series_cmp = series
-            if isinstance(value, list):
-                value_cmp = [pd.to_datetime(v) for v in value]
-            else:
-                value_cmp = pd.to_datetime(value)
-        else:
-            series_cmp = series
-            value_cmp = value
+        series_cmp = df[col]
+        is_dt = pd.api.types.is_datetime64_any_dtype(series_cmp)
+        value_cmp = _coerce_filter_value(series_cmp, value, op)
 
         if op == "eq":
             mask = series_cmp == value_cmp
@@ -204,9 +228,39 @@ def _apply_filters(df: pd.DataFrame, filters: list[dict[str, Any]]) -> pd.DataFr
                 str(value_cmp), case=False, na=False, regex=LITERAL_CONTAINS
             )
         else:
-            raise ValueError(f"Unsupported filter operator: {op}")
+            raise PlanValidationError(f"Unsupported filter operator: {op}")
         keep &= mask
     return df.loc[keep]
+
+
+def _coerce_filter_value(series: pd.Series, value: Any, op: str) -> Any:
+    """Đưa giá trị filter về kiểu của cột. LLM hay viết "10" cho cột số, 101 cho cột mã đơn
+    dạng chữ; so sánh khác kiểu luôn False → 0 dòng → "không có dữ liệu", sai mà trông như đúng.
+    Không đưa được về kiểu cột → PlanValidationError."""
+    if op == "contains":
+        return value
+    if isinstance(value, list):
+        return [_coerce_filter_value(series, v, op) for v in value]
+    if value is None:
+        raise PlanValidationError(f"Filter trên {series.name!r} thiếu giá trị.")
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if pd.api.types.is_datetime64_any_dtype(series):
+        if not isinstance(value, str):   # pd.to_datetime(2026) = 1970-01-01 00:00:00.000002026
+            raise PlanValidationError(f"Cột ngày {series.name!r} cần giá trị dạng YYYY-MM-DD, nhận {value!r}.")
+        try:
+            return pd.to_datetime(value)
+        except (ValueError, TypeError) as exc:
+            raise PlanValidationError(f"Giá trị ngày không đọc được cho {series.name!r}: {value!r}.") from exc
+    if pd.api.types.is_bool_dtype(series):
+        return value
+    if pd.api.types.is_numeric_dtype(series):
+        number = value if is_number else parse_number(value)
+        if number is None:
+            raise PlanValidationError(f"Cột số {series.name!r} không lọc được theo {value!r}.")
+        return number
+    if is_number:
+        return str(int(value)) if float(value).is_integer() else str(value)
+    return value
 
 
 def _is_date_only(value: Any) -> bool:
@@ -217,7 +271,7 @@ def _execute_aggregate(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     group_by = plan.get("group_by", []) or []
     metrics = plan.get("metrics", []) or []
     if not metrics:
-        raise ValueError("aggregate needs metrics.")
+        raise PlanValidationError("aggregate needs metrics.")
 
     if group_by:
         named_aggs = {}
@@ -263,7 +317,7 @@ def _execute_compare_metrics(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataF
             }
         )
     if not rows:
-        raise ValueError("compare_metrics needs metrics.")
+        raise PlanValidationError("compare_metrics needs metrics.")
     return pd.DataFrame(rows)
 
 
@@ -271,7 +325,7 @@ def _execute_time_series(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame
     time_col = plan.get("time_column")
     grain = plan.get("grain", "month")
     if not time_col:
-        raise ValueError("time_series needs time_column.")
+        raise PlanValidationError("time_series needs time_column.")
     if grain == "quarter" and not pd.api.types.is_datetime64_any_dtype(df[time_col]):
         period = df[time_col].astype(str)
     else:
@@ -297,10 +351,10 @@ def _execute_distribution(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFram
     """
     column = plan.get("column")
     if not column:
-        raise ValueError("distribution needs a column.")
+        raise PlanValidationError("distribution needs a column.")
     series = pd.to_numeric(df[column], errors="coerce").dropna()
     if series.empty:
-        raise ValueError(f"Column '{column}' has no numeric values for distribution.")
+        raise PlanValidationError(f"Column '{column}' has no numeric values for distribution.")
 
     n_bins = min(int(plan.get("bins", 10) or 10), 50)
     # If few distinct values, don't over-bin.
@@ -390,7 +444,7 @@ def _aggregate_series(series: pd.Series, aggregation: str) -> Any:
         return _clean_number(numeric.min(skipna=True))
     if aggregation == "max":
         return _clean_number(numeric.max(skipna=True))
-    raise ValueError(f"Unsupported aggregation: {aggregation}")
+    raise PlanValidationError(f"Unsupported aggregation: {aggregation}")
 
 
 def _numeric(series: pd.Series) -> pd.Series:
@@ -415,7 +469,7 @@ def _safe_column(label: str) -> str:
 
 def _require_column(known: set[str], col: Any) -> None:
     if not isinstance(col, str) or col not in known:
-        raise ValueError(f"Unknown column: {col}")
+        raise PlanValidationError(f"Unknown column: {col}")
 
 
 def _find_matching_result_column(result: pd.DataFrame, requested: str | None) -> str | None:
