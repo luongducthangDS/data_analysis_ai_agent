@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 
 import pandas as pd
+import pytest
 
 from backend.app.services.storage import (
     SessionStore,
@@ -118,3 +119,88 @@ def test_build_source_frame_bad_join_falls_back():
     sess = store.create_multiple([("shop.xlsx", _two_sheet_xlsx())])
     frame, _ = build_source_frame(sess, {"join": {"base": "Orders", "with": "Ghost", "on": "x"}})
     assert list(frame.columns) == list(sess.dataframe.columns)
+
+
+# ── Sheet gộp sống sót qua restart; mất thì từ chối, không đoán (P0 integrity) ──
+
+@pytest.fixture
+def offline(monkeypatch):
+    from backend.app.agents.nodes import respond
+
+    def boom():
+        raise RuntimeError("LLM disabled in test")
+
+    monkeypatch.setattr("backend.app.services.llm_service.get_llm_client", boom)
+    monkeypatch.setattr(respond, "get_llm_client", boom)
+
+
+def _merged_session(client) -> tuple[str, pd.DataFrame]:
+    from backend.app.services.storage import session_store
+    sid = client.post("/api/upload", files=[("files", ("wb.xlsx", _two_sheet_xlsx(), "application/octet-stream"))]).json()["session_id"]
+    resp = client.post("/api/merge-sheets", json={"session_id": sid, "sheet_names": ["Orders", "Items"]})
+    assert resp.status_code == 200
+    return sid, session_store.get(sid).dataframe.copy()
+
+
+def _restart(sid: str):
+    from backend.app.services.storage import session_store
+    session_store._forget(sid)
+    return session_store.get(sid)
+
+
+def _set_persisted_active(sid: str, name: str | None, clear_recipes: bool = False) -> None:
+    from backend.app.database import SessionModel, db_session
+    with db_session() as db:
+        row = db.get(SessionModel, sid)
+        row.active_sheet = name
+        if clear_recipes:
+            row.merged_sheets = None
+
+
+def test_merged_sheet_is_rebuilt_after_restart(client):
+    sid, before = _merged_session(client)
+    after = _restart(sid)
+    assert after.active_sheet == "Orders + Items"
+    assert not after.active_sheet_lost
+    pd.testing.assert_frame_equal(after.dataframe.reset_index(drop=True), before.reset_index(drop=True))
+
+
+def test_unrecoverable_merged_sheet_refuses_instead_of_answering_on_another_sheet(client, offline):
+    from backend.app.agents.runner import run
+    sid, _ = _merged_session(client)
+    _set_persisted_active(sid, "Orders + Items", clear_recipes=True)   # phiên cũ, gộp trước khi có recipe
+    session = _restart(sid)
+    assert session.active_sheet_lost
+
+    out = run(sid, "tổng revenue", [])
+    assert out.source == "deterministic"
+    assert out.executed_queries == ["[sheet_lost]"]
+    assert "Orders + Items" in out.answer and "Gộp" in out.answer
+    assert client.get(f"/api/dashboard/{sid}").status_code == 409
+
+
+def test_lost_flag_survives_the_answer_being_saved(client, offline):
+    """Lượt chat bị từ chối vẫn gọi save(); không được ghi đè tên sheet mất bằng sheet tự chọn."""
+    from backend.app.api.routes.chat import _persist_and_report
+    sid, _ = _merged_session(client)
+    _set_persisted_active(sid, "Orders + Items", clear_recipes=True)
+    session = _restart(sid)
+    _persist_and_report(session, "q", "a", [], "deterministic")
+    assert _restart(sid).active_sheet_lost
+
+
+def test_choosing_a_sheet_clears_the_refusal(client, offline):
+    from backend.app.agents.runner import run
+    sid, _ = _merged_session(client)
+    _set_persisted_active(sid, "Orders + Items", clear_recipes=True)
+    _restart(sid)
+    assert client.post(f"/api/session/{sid}/active-sheet", json={"sheet_name": "Orders"}).status_code == 200
+    assert run(sid, "tổng revenue", []).executed_queries != ["[sheet_lost]"]
+
+
+def test_concat_label_is_not_a_lost_sheet():
+    store = _fresh_store()
+    session = store.create("wb.xlsx", _two_sheet_xlsx(diff_schema=False))
+    assert session.active_sheet == "__concat__"
+    store._forget(session.session_id)
+    assert not store.get(session.session_id).active_sheet_lost

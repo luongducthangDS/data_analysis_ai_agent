@@ -137,6 +137,28 @@ def check_join_size(left: pd.DataFrame, right: pd.DataFrame, on: str) -> None:
         raise JoinTooLarge(f"Dữ liệu gộp vượt quá giới hạn an toàn ({rows:,} dòng > {MAX_JOIN_ROWS:,}).")
 
 
+def merge_sheet_frames(
+    sheets: dict[str, pd.DataFrame], keys: list[str], on: list[str | None]
+) -> tuple[pd.DataFrame, list[str]]:
+    """Left-join sheets[keys[0]] with each following sheet on on[i]; None = first
+    common column in sorted order (a set's order changes between processes, and a
+    restart must pick the same column). Returns the frame and the columns used,
+    which is what the recipe stores."""
+    merged = sheets[keys[0]].copy()
+    used: list[str] = []
+    for key, col in zip(keys[1:], on):
+        right = sheets[key]
+        if not col:
+            common = sorted(set(merged.columns) & set(right.columns))
+            if not common:
+                raise ValueError("No common columns found between sheets to merge on.")
+            col = common[0]
+        check_join_size(merged, right, col)
+        merged = merged.merge(right, on=col, how="left", suffixes=("", "_dup"))
+        used.append(col)
+    return merged, used
+
+
 @dataclass
 class DatasetSession:
     session_id: str
@@ -154,6 +176,10 @@ class DatasetSession:
     ecommerce_col_map: dict[str, str] = field(default_factory=dict)
     detected_platform: str | None = None
     active_sheet: str | None = None  # which sheet drives `dataframe`; None/"__concat__" = auto
+    merge_recipes: list[dict[str, Any]] = field(default_factory=list)  # persisted as merged_sheets
+    # The persisted active sheet (a merge) could not be rebuilt: `dataframe` is only a
+    # placeholder, so chat/dashboard must refuse until the user picks or re-merges a sheet.
+    active_sheet_lost: bool = False
 
 
 class SessionStore:
@@ -263,6 +289,7 @@ class SessionStore:
         key = resolve_sheet_key(sheet_key, session.sheets)
         session.dataframe = session.sheets[key].copy()
         session.active_sheet = key
+        session.active_sheet_lost = False
         session.profile = build_profile(session.dataframe)
         session.ecommerce_col_map = detect_ecommerce_columns(session.dataframe)
         session.detected_platform = detect_platform(
@@ -298,6 +325,7 @@ class SessionStore:
             row.profile = session.profile
             row.report_id = session.report_id
             row.active_sheet = session.active_sheet
+            row.merged_sheets = session.merge_recipes or None
             row.ecommerce_col_map = session.ecommerce_col_map or None
             row.detected_platform = session.detected_platform
             row.updated_at = datetime.utcnow()
@@ -476,6 +504,7 @@ class SessionStore:
             sample_set = row.sample_set
             blobs = [] if sample_set else [(f.name, f.content) for f in row.files]
             persisted_active = row.active_sheet
+            recipes = list(row.merged_sheets or [])
             # Legacy blob (pre append-only) first, then the per-message rows.
             history = list(row.chat_log or []) + [self._message_dict(h) for h in row.history]
             meta = dict(
@@ -494,14 +523,26 @@ class SessionStore:
         if not uploads:
             raise KeyError(f"No stored files for session: {session_id}")
         all_sheets, file_paths = self._build_sheets(session_id, uploads)
+        for recipe in recipes:
+            try:
+                all_sheets[recipe["name"]], _ = merge_sheet_frames(all_sheets, recipe["sources"], recipe["on"])
+            except (KeyError, ValueError):   # JoinTooLarge is a ValueError
+                _log.warning("restore: merged sheet %r not rebuilt session=%s",
+                             recipe.get("name"), session_id, exc_info=True)
         analysis_df, active_sheet = self._resolve_active_dataframe(all_sheets, active_sheet=persisted_active)
+        # A persisted sheet that is gone (merge from before recipes, or a recipe that
+        # no longer replays) must not quietly become another sheet: keep its name so
+        # save() does not overwrite it, and flag it so answers refuse.
+        lost = bool(persisted_active) and persisted_active != "__concat__" and persisted_active not in all_sheets
         session = DatasetSession(
             session_id=session_id,
             file_path=file_paths[0],
             dataframe=analysis_df,
             history=history,
             sheets=all_sheets,
-            active_sheet=active_sheet,
+            active_sheet=persisted_active if lost else active_sheet,
+            merge_recipes=recipes,
+            active_sheet_lost=lost,
             **meta,
         )
         self._remember(session)
@@ -714,6 +755,18 @@ def build_source_frame(
         return session.dataframe, None
 
     return session.dataframe, None
+
+
+
+def lost_sheet_notice(session: DatasetSession) -> str | None:
+    """Deterministic refusal when the active (merged) sheet could not be restored."""
+    if not session.active_sheet_lost:
+        return None
+    return (
+        f"Bảng gộp “{session.active_sheet}” không khôi phục được sau khi máy chủ khởi động lại, "
+        "nên tôi không tính trên bảng khác để tránh ra số sai. Hãy bấm “Gộp” lại ở danh sách sheet "
+        "(hoặc chọn một sheet) rồi hỏi lại."
+    )
 
 
 session_store = SessionStore()

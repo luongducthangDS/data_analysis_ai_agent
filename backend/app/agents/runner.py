@@ -15,7 +15,7 @@ _log = logging.getLogger(__name__)
 # Hạn chót cả lượt hỏi: hết hạn thì mọi lời gọi LLM dừng, các node rơi về fallback tất định.
 AGENT_DEADLINE_S = 45
 
-_DETERMINISTIC_TAGS = {"[needs_cogs]", "[data_summary:shop]", "[data_summary:deterministic]", "[bot_info:shop]", "[unclear]", "[no_rows]"}
+_DETERMINISTIC_TAGS = {"[needs_cogs]", "[data_summary:shop]", "[data_summary:deterministic]", "[bot_info:shop]", "[unclear]", "[no_rows]", "[sheet_lost]"}
 
 
 def _compute_source(state: AgentState) -> str:

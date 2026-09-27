@@ -125,6 +125,11 @@ def needs_cogs_node(state: AgentState) -> AgentState:
     return {**state, "charts": [], "executed_queries": ["[needs_cogs]"]}
 
 
+def sheet_lost_node(state: AgentState) -> AgentState:
+    """Bảng gộp đang chọn không khôi phục được → từ chối (tất định). Câu đã soạn ở classify."""
+    return {**state, "charts": [], "executed_queries": ["[sheet_lost]"]}
+
+
 def data_summary_node(state: AgentState) -> AgentState:
     """
     Answer overview/summary questions using session.profile directly.

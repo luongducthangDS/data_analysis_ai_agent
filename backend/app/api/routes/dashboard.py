@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.app.api.deps import RATE_LIMIT, get_current_user, get_session, limiter
 from backend.app.schemas import ChartSpec, DashboardResponse, KPICard
@@ -24,7 +24,7 @@ from backend.app.agents.runner import AGENT_DEADLINE_S
 from backend.app.services.llm_service import llm_deadline
 from backend.app.services.planner.execute import execute_plan
 from backend.app.services.ecommerce_semantic import METRICS, cogs_gap, fmt_num, fmt_pct, seller_questions
-from backend.app.services.storage import DatasetSession
+from backend.app.services.storage import DatasetSession, lost_sheet_notice
 
 _log = logging.getLogger(__name__)
 router = APIRouter()
@@ -384,6 +384,10 @@ def get_dashboard(
     LLM analyzes dataset profile → decides what KPIs + charts to show.
     Result is cached on the session object for subsequent calls.
     """
+    notice = lost_sheet_notice(_session)
+    if notice:   # dataframe is only a placeholder — no KPIs computed on the wrong sheet
+        raise HTTPException(status_code=409, detail=notice)
+
     # ── Cache hit ─────────────────────────────────────────────────────────────
     cached = getattr(_session, "_dashboard_cache", None)
     if cached is not None:

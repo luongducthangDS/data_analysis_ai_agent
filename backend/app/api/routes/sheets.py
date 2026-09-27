@@ -14,7 +14,7 @@ from backend.app.schemas import (
     SheetData,
 )
 from backend.app.api.routes.upload import build_preview
-from backend.app.services.storage import session_store, DatasetSession, check_join_size, resolve_sheet_key
+from backend.app.services.storage import session_store, DatasetSession, merge_sheet_frames, resolve_sheet_key
 
 
 class SetActiveSheetRequest(BaseModel):
@@ -124,21 +124,7 @@ def merge_sheets(
 
     try:
         resolved = [resolve_sheet_key(n, session.sheets) for n in req.sheet_names]
-        sheets_to_merge = {n: session.sheets[n] for n in resolved}
-
-        merged_df = sheets_to_merge[resolved[0]].copy()
-        for sheet_name in resolved[1:]:
-            df_to_merge = sheets_to_merge[sheet_name]
-            if req.join_key:
-                check_join_size(merged_df, df_to_merge, req.join_key)
-                merged_df = merged_df.merge(df_to_merge, on=req.join_key, how="left", suffixes=("", "_dup"))
-            else:
-                common_cols = set(merged_df.columns) & set(df_to_merge.columns)
-                if not common_cols:
-                    raise ValueError("No common columns found between sheets to merge on.")
-                join_col = list(common_cols)[0]
-                check_join_size(merged_df, df_to_merge, join_col)
-                merged_df = merged_df.merge(df_to_merge, on=join_col, how="left", suffixes=("", "_dup"))
+        merged_df, used_on = merge_sheet_frames(session.sheets, resolved, [req.join_key] * (len(resolved) - 1))
 
         # Readable label from the sheet parts ("Orders + Items"), not the raw
         # "file::sheet" keys. Keep it unique against existing sheet keys.
@@ -149,6 +135,8 @@ def merge_sheets(
             merged_name = f"{short} ({i})"
             i += 1
         session.sheets[merged_name] = merged_df
+        # Recipe with the columns actually used, so restore rebuilds the same frame.
+        session.merge_recipes.append({"name": merged_name, "sources": resolved, "on": used_on})
 
         # Make the merged frame the active analysis target (re-profiles + persists),
         # so chat/dashboard actually use it instead of leaving it inert.
