@@ -34,6 +34,17 @@ def set_request_keys(gemini: str = "", anthropic: str = "", provider: str = "") 
     _request_keys.set(keys)
 
 
+class LLMResponseTruncatedError(RuntimeError):
+    """Provider dừng vì chạm max_tokens: câu trả lời cụt trông như trả lời thật → coi là lỗi để failover."""
+
+
+def _raise_if_truncated(model: str, finish_reason: object) -> None:
+    # Gemini: FinishReason.MAX_TOKENS (IntEnum, so theo .name); OpenRouter/OpenAI: "length".
+    if getattr(finish_reason, "name", finish_reason) in ("MAX_TOKENS", "length"):
+        _log.warning("llm: %s cut the answer at max_tokens — treating as failure", model)
+        raise LLMResponseTruncatedError(f"{model}: answer truncated at max_tokens")
+
+
 # ── Hạn chót cho cả lượt hỏi (runner đặt) ─────────────────────────────────────
 _deadline: ContextVar[float] = ContextVar("_llm_deadline", default=float("inf"))
 
@@ -107,6 +118,9 @@ class GeminiLLMClient:
             if meta is not None:
                 call.prompt_tokens = getattr(meta, "prompt_token_count", 0) or 0
                 call.completion_tokens = getattr(meta, "candidates_token_count", 0) or 0
+            candidates = getattr(resp, "candidates", None) or []
+            if candidates:
+                _raise_if_truncated(self.model_name, getattr(candidates[0], "finish_reason", None))
             return (resp.text or "").strip()
 
     def generate_insights(self, context: str, max_tokens: int = 700, temperature: float = 0.35) -> str:
@@ -185,8 +199,9 @@ class OpenRouterLLMClient:
             # OpenRouter returns 200 with an `error` object for upstream failures.
             if body.get("error"):
                 raise RuntimeError(f"OpenRouter {self.model_id}: {body['error'].get('message', body['error'])}")
-            content = body["choices"][0]["message"]["content"]
-            return (content or "").strip()
+            choice = body["choices"][0]
+            _raise_if_truncated(self.model_id, choice.get("finish_reason"))
+            return (choice["message"]["content"] or "").strip()
 
     def generate_insights(self, context: str, max_tokens: int = 700, temperature: float = 0.35) -> str:
         system = """Bạn là trợ lý phân tích dữ liệu cho CEO.

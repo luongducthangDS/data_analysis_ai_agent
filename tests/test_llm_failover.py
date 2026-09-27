@@ -159,3 +159,57 @@ def test_single_key_keeps_original_chain(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GEMINI_MODELS", "model-a,model-b")
     assert [n for n, _ in _gemini_specs()] == ["gemini:model-a", "gemini:model-b"]
+
+
+# ── Câu trả lời bị cắt ở max_tokens = lỗi, không phải thành công ──────────────
+# gemini-3.8-flash từng trả "... kênh Shopee với 1.63" (cắt ở 500 token) mà vẫn được tính là thành công.
+
+class _GeminiResp:
+    def __init__(self, finish_reason):
+        import google.generativeai as genai
+        self.text = "Lãi tháng 6 của kênh Shopee với 1.63"
+        self.usage_metadata = None
+        self.candidates = [type("C", (), {"finish_reason": genai.protos.Candidate.FinishReason[finish_reason]})()]
+
+
+def _gemini_returning(monkeypatch, finish_reason):
+    import google.generativeai as genai
+    from backend.app.services.llm_service import GeminiLLMClient
+
+    class _Model:
+        def __init__(self, *a, **kw):
+            pass
+
+        def generate_content(self, prompt, **kw):
+            return _GeminiResp(finish_reason)
+
+    monkeypatch.setattr(genai, "GenerativeModel", _Model)
+    return GeminiLLMClient("gemini-test")
+
+
+def _openrouter_returning(monkeypatch, finish_reason):
+    from backend.app.services import llm_service
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Lãi tháng 6 với 1.63"}, "finish_reason": finish_reason}]}
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setattr(llm_service.requests, "post", lambda *a, **kw: _Resp())
+    return llm_service.OpenRouterLLMClient("x/model:free")
+
+
+@pytest.mark.parametrize("make, reason", [(_gemini_returning, "MAX_TOKENS"), (_openrouter_returning, "length")])
+def test_truncated_answer_fails_over_to_next_provider(monkeypatch, make, reason):
+    truncated = make(monkeypatch, reason)
+    c = FailoverLLMClient([("cut", lambda: truncated), _spec("b")])
+    assert c.generate("hi") == "b:hi"
+    assert c.last_provider == "b"
+
+
+@pytest.mark.parametrize("make, reason", [(_gemini_returning, "STOP"), (_openrouter_returning, "stop")])
+def test_complete_answer_is_returned(monkeypatch, make, reason):
+    assert make(monkeypatch, reason).generate("hi").endswith("1.63")
