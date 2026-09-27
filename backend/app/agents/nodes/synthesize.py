@@ -112,22 +112,36 @@ def _allowed_values(result_df) -> list[float]:
     return vals
 
 
-def _allowed_percents(result_df) -> list[float]:
-    """Percentages derivable from the table: ratio cells (0.335 or 33.5), share of a
-    column total, and change between two values of one column or one row."""
-    vals: list[float] = []
+def _derived_values(result_df) -> dict[str, list[float]]:
+    """Figures derivable from the table, beyond raw cells:
+      percents: ratio cells (0.335 or 33.5) and shares of a column total;
+      forward:  later − earlier (and % change) between two values of one column or one
+                row, in table order — time series ascend, bridge columns go T4 → T5;
+      backward: the same pairs the other way round.
+    A claim with a profit direction may only use `forward`: "lãi tăng 10 triệu" must
+    not pass on a 100 → 90 series because 100 − 90 = +10."""
+    out: dict[str, list[float]] = {"percents": [], "forward": [], "forward_pct": [],
+                                   "backward": [], "backward_pct": []}
     numeric = result_df.apply(pd.to_numeric, errors="coerce")
-    groups = [numeric[c].dropna().tolist() for c in numeric.columns]
-    groups += [row.dropna().tolist() for _, row in numeric.head(60).iterrows()]
     for col in numeric.columns:
         s = numeric[col].dropna()
-        vals += s.tolist() + (s * 100).tolist()
+        out["percents"] += s.tolist() + (s * 100).tolist()
         if s.sum():
-            vals += (s / s.sum() * 100).tolist()
+            out["percents"] += (s / s.sum() * 100).tolist()
+    groups = [numeric[c].dropna().tolist() for c in numeric.columns]
+    groups += [row.dropna().tolist() for _, row in numeric.head(60).iterrows()]
     for g in groups:
-        if len(g) <= 60:   # ponytail: O(n²) cặp; bảng dài hơn thì bỏ qua phần trăm thay đổi
-            vals += [(b - a) / abs(a) * 100 for i, a in enumerate(g) for j, b in enumerate(g) if i != j and a]
-    return vals
+        if len(g) > 60:   # ponytail: O(n²) cặp; bảng dài hơn thì không nhận số dẫn xuất
+            continue
+        for i, a in enumerate(g):
+            for j, b in enumerate(g):
+                if i == j:
+                    continue
+                key = "forward" if j > i else "backward"
+                out[key].append(b - a)
+                if a:
+                    out[key + "_pct"].append((b - a) / abs(a) * 100)
+    return out
 
 
 def _numbers_grounded(
@@ -136,17 +150,24 @@ def _numbers_grounded(
     """
     Reject answers citing figures that the result set does not support — the most
     common hallucination for a data tool, and the one that looks right to a seller.
-      - plain numbers ≥ 1000 must match a cell / column sum (±1% or last written digit);
+      - plain numbers ≥ 1000 must match a cell, a column sum or a difference of two
+        values (±1% or half the last written digit);
       - "99 triệu", "1,5 tỷ" are scaled and checked like plain numbers;
       - "45%" must match a ratio cell, a share of total or a change between values;
-      - "lãi tăng X" needs a POSITIVE match, "lãi giảm/âm X", "lỗ X" a NEGATIVE one;
+      - "lãi tăng X" needs a POSITIVE match, "lãi giảm/âm X", "lỗ X" a NEGATIVE one,
+        and differences only count in table order (see _derived_values);
       - numbers the user wrote in the question may be quoted back.
     `extra_allowed` whitelists derived figures (e.g. distribution stats).
     """
     if result_df is None or result_df.empty:
         return True
-    allowed = _allowed_values(result_df) + list(extra_allowed or [])
-    percents = _allowed_percents(result_df)
+    d = _derived_values(result_df)
+    values = _allowed_values(result_df) + list(extra_allowed or []) + d["forward"]
+    percents = d["percents"] + d["forward_pct"]
+    pools = {  # (percent?, signed?) → candidates
+        (False, True): values, (False, False): values + d["backward"],
+        (True, True): percents, (True, False): percents + d["backward_pct"],
+    }
     quoted = [abs(c.value) for c in _claims(question)]
     for claim in _claims(answer):
         target = abs(claim.value)
@@ -154,7 +175,7 @@ def _numbers_grounded(
             continue
         if any(abs(q - target) <= claim.tol for q in quoted):
             continue
-        pool = percents if claim.percent else allowed
+        pool = pools[(claim.percent, claim.sign != 0)]
         if not any(abs(abs(a) - target) <= claim.tol and (claim.sign == 0 or a * claim.sign > 0) for a in pool):
             _log.warning("synthesize_node: ungrounded %s in answer: %s (sign %+d)",
                          "percentage" if claim.percent else "number", claim.value, claim.sign)

@@ -47,6 +47,17 @@ def test_share_of_total_and_change_between_rows_are_derivable():
     assert _numbers_grounded("Lợi nhuận tháng 5 tăng 10% so với tháng 4.", MONTHS) is False
 
 
+def test_difference_between_two_values_is_derivable():
+    # eval_seller #25: "Shopee hơn TikTok khoảng 690 triệu" = 1.632.490.000 − 942.487.000, đúng số học.
+    assert _numbers_grounded("Shopee hơn TikTok Shop 28 triệu doanh thu.", CHANNELS) is True
+    assert _numbers_grounded("Shopee hơn TikTok Shop 30 triệu doanh thu.", CHANNELS) is False
+    assert _numbers_grounded("Lợi nhuận tháng 5 giảm 10 triệu so với tháng 4.", MONTHS) is True
+    # Có chiều thì chỉ so theo thứ tự bảng (kỳ trước → kỳ sau): 100 → 90 là GIẢM.
+    assert _numbers_grounded("Lợi nhuận tháng 5 tăng 10 triệu so với tháng 4.", MONTHS) is False
+    assert _numbers_grounded("Lợi nhuận tháng 5 tăng 11,1% so với tháng 4.", MONTHS) is False
+    assert _numbers_grounded("Tháng 4 lợi nhuận cao hơn tháng 5 11,1%.", MONTHS) is True   # không nói chiều lãi
+
+
 def test_numbers_quoted_from_the_question_are_allowed():
     answer = "Có 2 SKU có tỷ lệ hoàn trên 15%: LAN-127 và LAN-044."
     assert _numbers_grounded(answer, BRIDGE) is False
