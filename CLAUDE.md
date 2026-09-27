@@ -2,9 +2,11 @@
 
 - Sau mỗi lần sửa lỗi thật (bug, deploy hỏng, eval chấm sai, hiểu sai yêu cầu, hoặc chính Claude làm sai rồi phải sửa):
   thêm 1 mục vào đầu `docs/LESSONS.md` theo mẫu Sai gì / Gốc rễ / Sửa / Bài học, kèm hash commit.
-- Ghi ngay lúc sửa, không để dồn cuối. `docs/LESSONS.md` và `docs/UX_FEEDBACK_*.md` là ghi chú nội bộ, đã gitignore — KHÔNG đưa lên GitHub.
+- Ghi ngay lúc sửa, không để dồn cuối. `docs/LESSONS.md`, `docs/WORKLOG.md` và `docs/UX_FEEDBACK_*.md` là ghi chú nội bộ, đã gitignore — KHÔNG đưa lên GitHub.
   Docs được README link tới (EVALUATION, ENGINEERING, eval-baseline) thì vẫn commit bình thường.
 - Bài học lặp lại hoặc dễ tái phạm → rút thêm thành 1 dòng quy tắc trong CLAUDE.md.
+- Cuối mỗi ngày làm việc: thêm 1 mục vào đầu `docs/WORKLOG.md` (đã làm gì kèm commit, sự cố, tồn đọng,
+  trạng thái cuối ngày).
 
 ## Nhiều session Claude cùng repo
 
