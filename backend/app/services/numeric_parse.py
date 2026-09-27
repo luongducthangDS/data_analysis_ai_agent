@@ -16,6 +16,8 @@ Tách riêng thành module để `storage` (lúc nạp file) và `planner`
 from __future__ import annotations
 
 import re
+import unicodedata
+from functools import partial
 
 import pandas as pd
 
@@ -27,17 +29,22 @@ _UNIT_SUFFIXES = ("vnd", "vnđ", "usd", "eur", "gbp", "jpy", "aud", "cad", "đ")
 _BLANK_TOKENS = {"", "-", "--", "—", "–", "n/a", "na", "nan", "none", "null", "."}
 
 _CURRENCY_RE = re.compile(f"[{re.escape(_CURRENCY_CHARS)}]")
-_DOT_THOUSANDS_RE = re.compile(r"[+-]?\d{1,3}(\.\d{3})+")
+_DOT_THOUSANDS_RE = re.compile(r"[+-]?[1-9]\d{0,2}(\.\d{3})+")
 _LETTER_RE = re.compile(r"[A-Za-zÀ-ỹ]")
 _PLAIN_NUMBER_RE = re.compile(r"[+-]?\d*\.?\d+")
 _MAX_NUMBER_LEN = 40
+_NUM_TOKEN_RE = re.compile(r"\d[\d.,]*\d|\d")
 
 
-def parse_number(value: object) -> float | None:
+def parse_number(value: object, decimal: str | None = None) -> float | None:
     """Đọc một ô thành float. Trả None khi ô đó không phải số.
 
     Trả None chứ không phải 0.0 khi không đọc được — nhầm hai thứ này làm
     một cột chữ biến thành cột toàn 0 và mọi phép tính sau đó đều sai.
+
+    `decimal` ("," hoặc ".") là dấu thập phân CẢ CỘT đã quyết định (`detect_decimal`);
+    có nó thì không đoán lại từng ô — đoán từng ô từng cho "1,5" → 1.5 nhưng "1,500" → 1500
+    trong cùng một cột.
     """
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -75,6 +82,14 @@ def parse_number(value: object) -> float | None:
     if text.lower() in _BLANK_TOKENS or text in {"-", "+"}:
         # " $ -  " nghĩa là 0 trong báo cáo tài chính, không phải "không đọc được".
         return 0.0
+
+    if decimal is not None:
+        text = text.replace("." if decimal == "," else ",", "").replace(",", ".")
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+        return -number if negative else number
 
     # Dạng phân cách nghìn kiểu Việt/Âu phải xét TRƯỚC float() trực tiếp:
     # float("1.900") = 1.9, trong khi "1.900" ở đây gần như luôn là 1900.
@@ -126,12 +141,48 @@ def _normalize_separators(text: str) -> str:
             return text.replace(".", "").replace(",", ".")
         return text.replace(",", "")               # 1,234.56 → Anh-Mỹ
     if has_comma:
-        # Một dấu phẩy: "1,5" là thập phân, "1,234" là phân cách nghìn.
+        # Một dấu phẩy: "1,5" là thập phân, "1,234" là phân cách nghìn, "0,125" là thập phân.
         whole, _, frac = text.rpartition(",")
-        if len(frac) == 3 and whole.lstrip("+-").isdigit():
+        digits = whole.lstrip("+-")
+        if len(frac) == 3 and digits.isdigit() and not digits.startswith("0"):
             return text.replace(",", "")
         return text.replace(",", ".")
     return text
+
+
+def _decimal_hint(token: str) -> str | None:
+    """Dấu CHẮC CHẮN là thập phân trong một số, hoặc None khi mơ hồ ("1.900", "1,500")."""
+    dots, commas = token.count("."), token.count(",")
+    if dots and commas:        # 1.234,5 / 1,234.5: dấu đứng sau là thập phân
+        return "," if token.rfind(",") > token.rfind(".") else "."
+    if dots > 1:               # 1.234.567: chấm là phân cách nghìn → thập phân là phẩy
+        return ","
+    if commas > 1:
+        return "."
+    sep = "." if dots else "," if commas else None
+    if sep is None:
+        return None
+    whole, frac = token.split(sep)
+    if len(frac) != 3 or whole.startswith("0"):   # 1,5 / 12.50 / 0,125
+        return sep
+    return None
+
+
+def detect_decimal(values) -> str | None:
+    """Dấu thập phân của cả cột: "," hoặc "." khi mọi ô có dấu hiệu rõ đều đồng ý,
+    None khi không ô nào rõ hoặc các ô mâu thuẫn (khi đó đọc từng ô như cũ)."""
+    hints = set()
+    for v in values:
+        if isinstance(v, str) and len(v) <= _MAX_NUMBER_LEN:
+            m = _NUM_TOKEN_RE.search(v)
+            if m and (hint := _decimal_hint(m.group())):
+                hints.add(hint)
+    return hints.pop() if len(hints) == 1 else None
+
+
+def _parse_column(series: pd.Series) -> pd.Series:
+    decimal = detect_decimal(series.dropna().unique())
+    return map_unique(series, partial(parse_number, decimal=decimal))
 
 
 def parse_numeric_series(series: pd.Series) -> pd.Series:
@@ -142,7 +193,7 @@ def parse_numeric_series(series: pd.Series) -> pd.Series:
     # Nếu cách nhanh đã đọc được hết thì khỏi đi đường chậm.
     if converted.notna().sum() == series.notna().sum():
         return converted
-    return map_unique(series, parse_number).astype("float64")
+    return _parse_column(series).astype("float64")
 
 
 def map_unique(series: pd.Series, fn) -> pd.Series:
@@ -171,19 +222,20 @@ def coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
         non_null = series.notna().sum()
         if not non_null:
             continue
-        parsed = map_unique(series, parse_number)
+        parsed = _parse_column(series)
         if parsed.notna().sum() >= MIN_PARSE_RATIO * non_null:
             df[column] = parsed.astype("float64")
     return df
 
 
 def strip_column_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Bỏ khoảng trắng thừa ở tên cột (" Profit " → "Profit").
+    """Bỏ khoảng trắng thừa ở tên cột (" Profit " → "Profit") và chuẩn hoá NFC
+    (Excel Mac lưu "Mã đơn hàng" dạng tổ hợp → không khớp EXPORT_HEADERS).
 
     Giữ nguyên tên gốc nếu việc cắt làm hai cột trùng tên — thà để tên xấu
     còn hơn làm mất một cột dữ liệu.
     """
-    stripped = [str(c).strip() for c in df.columns]
+    stripped = [unicodedata.normalize("NFC", str(c)).strip() for c in df.columns]
     if len(set(stripped)) != len(stripped):
         return df
     df.columns = stripped
