@@ -16,7 +16,7 @@ from backend.app.schemas import (
     SheetData,
 )
 from backend.app.api.routes.upload import build_preview
-from backend.app.services.storage import session_store, DatasetSession, resolve_sheet_key
+from backend.app.services.storage import session_store, DatasetSession, check_join_size, resolve_sheet_key
 
 
 class SetActiveSheetRequest(BaseModel):
@@ -130,12 +130,14 @@ def merge_sheets(
         for sheet_name in resolved[1:]:
             df_to_merge = sheets_to_merge[sheet_name]
             if req.join_key:
+                check_join_size(merged_df, df_to_merge, req.join_key)
                 merged_df = merged_df.merge(df_to_merge, on=req.join_key, how="left", suffixes=("", "_dup"))
             else:
                 common_cols = set(merged_df.columns) & set(df_to_merge.columns)
                 if not common_cols:
                     raise ValueError("No common columns found between sheets to merge on.")
                 join_col = list(common_cols)[0]
+                check_join_size(merged_df, df_to_merge, join_col)
                 merged_df = merged_df.merge(df_to_merge, on=join_col, how="left", suffixes=("", "_dup"))
 
         # Readable label from the sheet parts ("Orders + Items"), not the raw

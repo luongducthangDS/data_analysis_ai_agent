@@ -117,6 +117,7 @@ def build_preview(df, n: int = 10) -> tuple[list[str], list[dict]]:
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_FILES = 5   # bộ shop đầy đủ là 4 file (2 export + giá vốn + quảng cáo)
 
 
 @router.post("/api/upload", response_model=UploadResponse)
@@ -130,6 +131,8 @@ def upload_dataset(
 ) -> UploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
+    if len(files) > MAX_FILES:
+        raise HTTPException(status_code=400, detail=f"Tối đa {MAX_FILES} file mỗi lần tải lên.")
 
     uploads: list[tuple[str, bytes]] = []
     for file in files:

@@ -48,6 +48,26 @@ def resolve_sheet_key(name: str, sheets: dict[str, pd.DataFrame]) -> str:
     raise ValueError(f"Unknown sheet name '{name}'.")
 
 
+MAX_JOIN_ROWS = 2_000_000
+
+
+class JoinTooLarge(ValueError):
+    """Join nhiều-nhiều sẽ sinh quá MAX_JOIN_ROWS dòng — chặn trước khi pandas cấp phát (T02)."""
+
+
+def check_join_size(left: pd.DataFrame, right: pd.DataFrame, on: str) -> None:
+    """Raise JoinTooLarge nếu left join trên `on` sinh quá MAX_JOIN_ROWS dòng.
+    Σ count_left[k] · max(count_right[k], 1) đúng bằng số dòng left join (inner join ≤ số đó);
+    dropna=False vì pandas ghép NaN với NaN."""
+    if len(left) * len(right) <= MAX_JOIN_ROWS:
+        return
+    left_counts = left[on].value_counts(dropna=False)
+    right_counts = right[on].value_counts(dropna=False).reindex(left_counts.index, fill_value=0).clip(lower=1)
+    rows = int((left_counts * right_counts).sum())
+    if rows > MAX_JOIN_ROWS:
+        raise JoinTooLarge(f"Dữ liệu gộp vượt quá giới hạn an toàn ({rows:,} dòng > {MAX_JOIN_ROWS:,}).")
+
+
 @dataclass
 class DatasetSession:
     session_id: str
@@ -601,6 +621,7 @@ def build_source_frame(
             how = join.get("how", "left")
             if how not in {"left", "inner"}:
                 how = "left"
+            check_join_size(base_df, with_df, on)
             merged = base_df.merge(with_df, on=on, how=how, suffixes=("", "_dup"))
 
             warning = None
@@ -610,6 +631,8 @@ def build_source_frame(
                     "(quan hệ 1-nhiều) — các phép tính tổng/đếm có thể bị nhân lên."
                 )
             return merged, warning
+    except JoinTooLarge:
+        raise   # không lặng lẽ trả sheet active: plan_node sẽ rơi về fallback plan
     except Exception:
         return session.dataframe, None
 
