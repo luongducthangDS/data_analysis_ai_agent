@@ -57,3 +57,6 @@
 - Kết quả tổng hợp 0 dòng phải là "không có dữ liệu" (bảng rỗng), không phải số 0. Cắt dữ liệu trước khi đưa LLM thì ghi rõ còn bao nhiêu dòng.
 - Vá code có regex bằng script: ghi script ra file rồi chạy (heredoc từng biến `\b` thành backspace); sau đó `grep -P '\x08'`.
 - Thêm field vào response API, giá trị `source` mới, hoặc câu trả lời nhắc tới một nút → sửa `frontend/src/main.tsx` trong cùng thay đổi (đã có lần backend bảo "bấm Tải mẫu giá vốn" mà UI không có nút).
+- Hai đường dựng cùng một trạng thái (create/restore) phải đi chung một hàm (`_build_sheets`), kèm test `restore(create(x)) == create(x)` với tên file trùng/khác dấu cách.
+- Grounding/validator: sửa từ chối nhầm bằng cách so khớp chính xác hơn, KHÔNG bỏ bớt thông tin (`abs()`, xoá `%`); test cả hai chiều (câu đúng qua, câu sai bị chặn).
+- Field từ LLM (plan, spec): kiểm miền giá trị và kiểu (`_coerce_filter_value`, `ALLOWED_GRAINS`), không dùng `.get(x, default)` im lặng. Định dạng số quyết định theo CỘT (`detect_decimal`).
