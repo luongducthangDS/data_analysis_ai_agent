@@ -34,6 +34,9 @@ REPORT_DIR = BASE_DATA_DIR / "reports"
 # In-memory DataFrame LRU; evicted sessions reload from disk/DB on next access
 # (merged sheets are not kept).
 _MAX_CACHE_SIZE = get_settings().session_cache_size
+# RAM is the real limit (Render free = 512 MB), not the number of sessions: one
+# 10 MB CSV of text columns can take 100+ MB as a DataFrame.
+_MAX_CACHE_BYTES = get_settings().session_cache_mb * 1024 * 1024
 _CACHE_TTL_SECONDS = 24 * 3600
 
 _log = logging.getLogger(__name__)
@@ -156,6 +159,7 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, DatasetSession] = {}
         self._last_accessed: dict[str, float] = {}
+        self._nbytes: dict[str, int] = {}
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -203,8 +207,7 @@ class SessionStore:
             # Not durable = not created: a RAM-only session would vanish on restart.
             _remove_uploads(session_id)
             raise
-        self._sessions[session_id] = session
-        self._last_accessed[session_id] = time.time()
+        self._remember(session)
         return session
 
     def _build_sheets(
@@ -255,11 +258,12 @@ class SessionStore:
         # Invalidate cached dashboard so it recomputes for the new sheet.
         for attr in ("_dashboard_cache", "_dashboard_charts_raw"):
             session.__dict__.pop(attr, None)
+        self._nbytes.pop(session.session_id, None)   # new frame (or merged sheet) → recount
         self.save(session)
         return session
 
     def get(self, session_id: str, owner_id: str = "") -> DatasetSession:
-        self._evict_stale()
+        self._evict_stale(protect=session_id)
         if session_id in self._sessions:
             session = self._sessions[session_id]
             self._check_ownership(session, owner_id)
@@ -273,8 +277,7 @@ class SessionStore:
     def save(self, session: DatasetSession) -> None:
         """Persist profile, report_id, active sheet and e-commerce mapping.
         History is NOT written here — see append_messages."""
-        self._sessions[session.session_id] = session
-        self._last_accessed[session.session_id] = time.time()
+        self._remember(session)
         with db_session() as db:
             row = db.get(SessionModel, session.session_id)
             if row is None:
@@ -327,8 +330,7 @@ class SessionStore:
 
     def delete_session(self, session_id: str) -> None:
         """Remove session from cache, DB, and all associated files."""
-        self._sessions.pop(session_id, None)
-        self._last_accessed.pop(session_id, None)
+        self._forget(session_id)
 
         # DB first (cascades to chat_history / session_files) — a failure here
         # must reach the caller, not report 204 while the data is still there.
@@ -379,22 +381,49 @@ class SessionStore:
         if session.owner_id and owner_id and session.owner_id != owner_id:
             raise PermissionError(f"Access denied to session: {session.session_id}")
 
-    def _evict_stale(self) -> None:
+    def _remember(self, session: DatasetSession) -> None:
+        """Put a session in the RAM cache (counting its bytes once) and evict others to fit."""
+        sid = session.session_id
+        self._sessions[sid] = session
+        self._last_accessed[sid] = time.time()
+        if sid not in self._nbytes:
+            self._nbytes[sid] = self._session_nbytes(session)
+        self._evict_stale(protect=sid)
+
+    def _forget(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+        self._last_accessed.pop(session_id, None)
+        self._nbytes.pop(session_id, None)
+
+    @staticmethod
+    def _session_nbytes(session: DatasetSession) -> int:
+        """Deep size of every distinct frame the session holds; `dataframe` is often
+        one of `sheets`, so count by identity."""
+        frames = {id(df): df for df in [*session.sheets.values(), session.dataframe]}
+        return int(sum(df.memory_usage(deep=True).sum() for df in frames.values()))
+
+    def _evict_stale(self, protect: str | None = None) -> None:
+        """Drop expired sessions, then least-recently-used ones until both the count
+        and the byte budget fit. `protect` (the session in use) is never dropped, so
+        a session bigger than the whole budget still works — it just stays alone.
+        ponytail: a request still holding an evicted session keeps its RAM until it
+        finishes, so the budget is soft; lower SESSION_CACHE_MB if the box still OOMs."""
         now = time.time()
         # Snapshot first: sync routes + the cleanup thread touch this dict
         # concurrently, and iterating it live raises "changed size during iteration".
         accessed = list(self._last_accessed.items())
-        stale = [sid for sid, t in accessed if now - t > _CACHE_TTL_SECONDS]
-        for sid in stale:
-            self._sessions.pop(sid, None)
-            self._last_accessed.pop(sid, None)
+        for sid, t in accessed:
+            if now - t > _CACHE_TTL_SECONDS and sid != protect:
+                self._forget(sid)
 
-        # Enforce max cache size via LRU eviction
-        if len(self._sessions) > _MAX_CACHE_SIZE:
-            oldest = [sid for sid, _ in sorted(accessed, key=lambda kv: kv[1]) if sid in self._sessions]
-            for sid in oldest[: len(self._sessions) - _MAX_CACHE_SIZE]:
-                self._sessions.pop(sid, None)
-                self._last_accessed.pop(sid, None)
+        lru = [sid for sid, _ in sorted(accessed, key=lambda kv: kv[1])
+               if sid in self._sessions and sid != protect]
+        total = sum(self._nbytes.get(sid, 0) for sid in list(self._sessions))
+        for sid in lru:
+            if len(self._sessions) <= _MAX_CACHE_SIZE and total <= _MAX_CACHE_BYTES:
+                break
+            total -= self._nbytes.get(sid, 0)
+            self._forget(sid)
 
     def _insert_session(self, session: DatasetSession, uploads: list[tuple[str, bytes]]) -> None:
         with db_session() as db:
@@ -453,7 +482,7 @@ class SessionStore:
                 detected_platform=row.detected_platform,
                 active_sheet=active_sheet,
             )
-            self._sessions[session_id] = session
+            self._remember(session)
             return session
 
     @staticmethod

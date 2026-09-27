@@ -48,6 +48,9 @@ services:
       # Max sessions kept in RAM (default 200) — keep low for 512 MB.
       - key: SESSION_CACHE_SIZE
         value: "10"
+      # …and at most this many MB of DataFrames in RAM (LRU by bytes).
+      - key: SESSION_CACHE_MB
+        value: "150"
 
 # Keep-alive (free tier sleeps after 15 min idle): point a free cron
 # (cron-job.org / UptimeRobot) at GET https://<app>.onrender.com/api/health

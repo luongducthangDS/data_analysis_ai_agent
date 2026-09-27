@@ -232,3 +232,41 @@ def test_delete_session_removes_every_report_of_that_session(client):
     assert client.delete(f"/api/session/{sid}").status_code == 204
     with db_session() as db:
         assert db.query(ReportModel).filter(ReportModel.report_id.in_(ids)).count() == 0
+
+
+# ── Cache giới hạn theo byte (P0 RF1) ───────────────────────────────────────
+
+def _big_csv(rows: int = 2000) -> bytes:
+    df = pd.DataFrame({"sku": [f"SKU-{i:05d}" for i in range(rows)], "amount": range(rows)})
+    return make_csv_bytes(df)
+
+
+def test_cache_evicts_least_recent_session_when_over_byte_budget(monkeypatch):
+    from backend.app.services import storage
+    store = _fresh_store()
+    first = store.create("a.csv", _big_csv())
+    one = store._nbytes[first.session_id]
+    monkeypatch.setattr(storage, "_MAX_CACHE_BYTES", int(one * 2.5))   # vừa 2 session
+
+    second = store.create("b.csv", _big_csv())
+    third = store.create("c.csv", _big_csv())
+
+    assert set(store._sessions) == {second.session_id, third.session_id}
+    assert first.session_id not in store._nbytes
+    # Bị đuổi khỏi RAM ≠ mất: lần sau đọc lại từ DB.
+    assert len(store.get(first.session_id).dataframe) == 2000
+
+
+def test_cache_keeps_a_session_bigger_than_the_whole_budget(monkeypatch):
+    from backend.app.services import storage
+    monkeypatch.setattr(storage, "_MAX_CACHE_BYTES", 1)
+    store = _fresh_store()
+    session = store.create("a.csv", _big_csv())
+    assert list(store._sessions) == [session.session_id]   # không đuổi chính session vừa dùng
+
+
+def test_cache_counts_a_frame_shared_by_dataframe_and_sheets_once():
+    store = _fresh_store()
+    session = store.create("a.csv", _big_csv())
+    assert session.dataframe is next(iter(session.sheets.values()))
+    assert store._nbytes[session.session_id] == int(session.dataframe.memory_usage(deep=True).sum())

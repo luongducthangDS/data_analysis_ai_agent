@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     session_ttl_days: int = 7
     # DataFrames kept in RAM (LRU); lower on small instances (Render free = 512 MB).
     session_cache_size: int = 200
+    # …and at most this many MB of DataFrames (deep memory_usage). Whichever limit hits first.
+    session_cache_mb: int = 200
 
     # CORS
     allowed_origins: str = "*"  # comma-separated list or "*"
