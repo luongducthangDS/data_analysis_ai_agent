@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
+import pandas as pd
 from tenacity import retry, stop_after_attempt, stop_any, wait_exponential
 
 from backend.app.agents.state import AgentState
@@ -15,9 +17,37 @@ _log = logging.getLogger(__name__)
 _BAD_STARTS = ("error", "exception", "traceback", "none", "null", "undefined")
 
 # Numbers >= this threshold must be traceable to the result set (anti-hallucination).
-# Small ints (years, ranks, counts like "3-5 câu") are ignored to avoid false rejects.
+# Small plain ints (ranks, counts like "3-5 câu") are ignored to avoid false rejects;
+# percentages and numbers with a unit ("99 triệu") are always checked.
 _GROUNDING_MIN = 1000.0
 _GROUNDING_REL_TOL = 0.01  # 1% relative tolerance for rounding/formatting
+
+_SCALES = {"nghìn": 1e3, "ngàn": 1e3, "triệu": 1e6, "tr": 1e6, "tỷ": 1e9, "tỉ": 1e9}
+_L = "A-Za-zÀ-ỹ"
+# Lookbehind loại phần số nằm trong MÃ ĐỊNH DANH: "GL001279", "LAN-1270" từng bị đọc
+# thành 1279/1270, vượt ngưỡng grounding → câu trả lời đúng bị từ chối.
+_CLAIM_RE = re.compile(
+    rf"(?<![{_L}0-9_])(?<![{_L}0-9]-)(\d[\d.,]*\d|\d)"
+    rf"(\s*%|\s*(?:nghìn|ngàn|triệu|tr|tỷ|tỉ)(?![{_L}]))?",
+    re.IGNORECASE,
+)
+# Con số ngay sau "lãi/lợi nhuận … tăng|giảm|âm" hoặc "lỗ" là lãi (hay Δ lãi) CÓ DẤU.
+# ponytail: chỉ xét chủ ngữ lãi — "phí sàn tăng X" có dấu ngược với cột ảnh hưởng lãi.
+# "Lãi giảm vì phí tăng X" bị đọc là lãi tăng → từ chối nhầm, rơi về câu tất định (an toàn).
+_PROFIT_SIGN_RE = re.compile(
+    rf"(?:(?<![{_L}])(?:lãi|lợi nhuận)[^.,;:\n]{{0,40}}?(?<![{_L}])(tăng|giảm|âm)|(?<![{_L}])(lỗ))"
+    r"\s+(?:thêm\s+|khoảng\s+|gần\s+|hơn\s+|đến\s+|tới\s+)?$",
+    re.IGNORECASE,
+)
+_YEAR_BEFORE_RE = re.compile(r"(?:năm|/)\s*$", re.IGNORECASE)
+
+
+@dataclass
+class _Claim:
+    value: float   # đã nhân đơn vị ("11,6 triệu" → 11_600_000)
+    percent: bool
+    tol: float     # sai số cho phép: làm tròn theo chữ số cuối đã viết, tối thiểu 1%
+    sign: int      # +1 "lãi tăng", -1 "lãi giảm/âm", "lỗ", "-5.000"; 0 = không nói chiều
 
 
 def _is_valid_synthesis(answer: str) -> bool:
@@ -29,23 +59,39 @@ def _is_valid_synthesis(answer: str) -> bool:
     return True
 
 
-def _parse_numbers(text: str) -> list[float]:
-    """Extract numeric values from text, handling VN ('859.045.000') and EN ('8,950.20') formats."""
-    out: list[float] = []
-    # Drop percentages — they are derived, not raw result values.
-    text = re.sub(r"\d[\d.,]*\s*%", " ", text)
-    # Lookbehind loại phần số nằm trong MÃ ĐỊNH DANH: "GL001279" từng bị đọc
-    # thành 1279, vượt ngưỡng grounding, không khớp kết quả nào → câu trả lời
-    # đúng của LLM bị từ chối và agent rơi xuống bản dự phòng.
-    for tok in re.findall(r"(?<![A-Za-zÀ-ỹ0-9_])\d[\d.,]*\d|(?<![A-Za-zÀ-ỹ0-9_])\d", text):
-        # Dùng chung bộ đọc số với phần còn lại của hệ thống. Bản cũ coi mọi
-        # token có cả "," và "." là kiểu Anh, nên "1.999,52" (kiểu Việt) thành
-        # "1.999.52" → float() lỗi → SỐ ĐÓ BỊ BỎ QUA. Hệ quả: một con số bịa
-        # viết theo định dạng Việt Nam lọt qua lớp kiểm chứng grounding.
+def _claims(text: str) -> list[_Claim]:
+    """Every figure the text asserts, with unit, rounding tolerance and profit direction."""
+    out: list[_Claim] = []
+    for m in _CLAIM_RE.finditer(text):
+        tok, unit = m.group(1), (m.group(2) or "").strip().lower()
+        # Dùng chung bộ đọc số với phần còn lại của hệ thống: "1.999,52" (kiểu Việt)
+        # từng bị bỏ qua → số bịa viết kiểu Việt lọt qua grounding.
         value = parse_number(tok)
-        if value is not None:
-            out.append(value)
+        if value is None:
+            continue
+        prefix = text[max(0, m.start(1) - 80):m.start(1)]
+        if (not unit and value.is_integer() and 1900 <= value <= 2100
+                and (_YEAR_BEFORE_RE.search(prefix) or text[m.end(1):m.end(1) + 1] in ("-", "/"))):
+            continue   # "năm 2026", "5/2026", "2026-05": năm, không phải số liệu
+        frac = re.search(r"[.,](\d+)$", tok)
+        decimals = len(frac.group(1)) if frac and not value.is_integer() else 0
+        scale = _SCALES.get(unit, 1.0)
+        value *= scale
+        rounding = 0.5 * 10 ** -decimals * scale
+        tol = max(rounding, abs(value) * _GROUNDING_REL_TOL) if unit else max(abs(value) * _GROUNDING_REL_TOL, 1.0)
+        sign_m = _PROFIT_SIGN_RE.search(prefix)
+        if sign_m:
+            sign = 1 if (sign_m.group(1) or "").lower() == "tăng" else -1
+        else:
+            explicit_minus = prefix.endswith(("-", "−")) and not prefix[-2:-1].isalnum()
+            sign = -1 if explicit_minus else 0
+        out.append(_Claim(value, unit == "%", tol, sign))
     return out
+
+
+def _parse_numbers(text: str) -> list[float]:
+    """Plain (non-percentage) figures in the text, units applied."""
+    return [c.value for c in _claims(text) if not c.percent]
 
 
 def _allowed_values(result_df) -> list[float]:
@@ -66,29 +112,52 @@ def _allowed_values(result_df) -> list[float]:
     return vals
 
 
-def _numbers_grounded(answer: str, result_df, extra_allowed: list[float] | None = None) -> bool:
+def _allowed_percents(result_df) -> list[float]:
+    """Percentages derivable from the table: ratio cells (0.335 or 33.5), share of a
+    column total, and change between two values of one column or one row."""
+    vals: list[float] = []
+    numeric = result_df.apply(pd.to_numeric, errors="coerce")
+    groups = [numeric[c].dropna().tolist() for c in numeric.columns]
+    groups += [row.dropna().tolist() for _, row in numeric.head(60).iterrows()]
+    for col in numeric.columns:
+        s = numeric[col].dropna()
+        vals += s.tolist() + (s * 100).tolist()
+        if s.sum():
+            vals += (s / s.sum() * 100).tolist()
+    for g in groups:
+        if len(g) <= 60:   # ponytail: O(n²) cặp; bảng dài hơn thì bỏ qua phần trăm thay đổi
+            vals += [(b - a) / abs(a) * 100 for i, a in enumerate(g) for j, b in enumerate(g) if i != j and a]
+    return vals
+
+
+def _numbers_grounded(
+    answer: str, result_df, extra_allowed: list[float] | None = None, question: str = ""
+) -> bool:
     """
-    Reject answers citing large numbers absent from the result set — the most
-    common hallucination for a data tool. Conservative: only checks values >= 1000.
-    `extra_allowed` lets callers whitelist derived figures (e.g. distribution stats
-    computed from the source column, not present in the binned result table).
+    Reject answers citing figures that the result set does not support — the most
+    common hallucination for a data tool, and the one that looks right to a seller.
+      - plain numbers ≥ 1000 must match a cell / column sum (±1% or last written digit);
+      - "99 triệu", "1,5 tỷ" are scaled and checked like plain numbers;
+      - "45%" must match a ratio cell, a share of total or a change between values;
+      - "lãi tăng X" needs a POSITIVE match, "lãi giảm/âm X", "lỗ X" a NEGATIVE one;
+      - numbers the user wrote in the question may be quoted back.
+    `extra_allowed` whitelists derived figures (e.g. distribution stats).
     """
     if result_df is None or result_df.empty:
         return True
-    allowed = _allowed_values(result_df)
-    if extra_allowed:
-        allowed.extend(extra_allowed)
-    # _parse_numbers không đọc dấu: "lãi giảm 11.567.470" phải khớp ô −11567470 trong bảng.
-    allowed = [abs(a) for a in allowed]
-    for num in _parse_numbers(answer):
-        if abs(num) < _GROUNDING_MIN:
+    allowed = _allowed_values(result_df) + list(extra_allowed or [])
+    percents = _allowed_percents(result_df)
+    quoted = [abs(c.value) for c in _claims(question)]
+    for claim in _claims(answer):
+        target = abs(claim.value)
+        if not claim.percent and target < _GROUNDING_MIN:
             continue
-        # Skip bare years (e.g. "năm 2026") — narrative, not a result figure.
-        if num.is_integer() and 1900 <= num <= 2100:
+        if any(abs(q - target) <= claim.tol for q in quoted):
             continue
-        tol = max(abs(num) * _GROUNDING_REL_TOL, 1.0)
-        if not any(abs(num - a) <= tol for a in allowed):
-            _log.warning("synthesize_node: ungrounded number in answer: %s", num)
+        pool = percents if claim.percent else allowed
+        if not any(abs(abs(a) - target) <= claim.tol and (claim.sign == 0 or a * claim.sign > 0) for a in pool):
+            _log.warning("synthesize_node: ungrounded %s in answer: %s (sign %+d)",
+                         "percentage" if claim.percent else "number", claim.value, claim.sign)
             return False
     return True
 
@@ -210,7 +279,7 @@ def synthesize_node(state: AgentState) -> AgentState:
             "- Nếu kết quả không đủ rõ ràng hoặc dữ liệu trống: hãy nói rõ 'Không tìm thấy dữ liệu phù hợp' thay vì đoán"
         )
         answer = _call_llm(client, prompt)
-        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df, extra_allowed=dist_allowed):
+        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df, extra_allowed=dist_allowed, question=question):
             _log.info("synthesize_node: LLM synthesis OK (%d chars)", len(answer))
             if plan.get("action") == "profit_bridge":
                 # Gợi ý tính tất định, không để LLM tự nghĩ hay bỏ sót.
