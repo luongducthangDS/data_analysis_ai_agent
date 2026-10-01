@@ -61,7 +61,7 @@
 - So khớp từ khoá trên câu hỏi đã bỏ dấu phải khớp NGUYÊN TỪ (`\b`): chuỗi con "ai " từng khớp nhầm "lãi"/"loại"/"cái".
 - Chạy test: `.venv/Scripts/python.exe -m pytest -q` (python hệ thống thiếu pytest-mock → 5 lỗi giả ở test_api).
 - eval_100 cần server đang chạy: `tests/eval_100.py --base-url http://localhost:PORT --ids ...`; baseline ở `docs/eval-baseline/`.
-- Lời hứa seller đo bằng `tests/eval_seller.py --base-url ...` (166 câu, 3 cách nạp A đủ / B không giá vốn / C thiếu 1/3);
+- Lời hứa seller đo bằng `tests/eval_seller.py --base-url ...` (167 câu, 3 cách nạp A đủ / B không giá vốn / C thiếu 1/3);
   thêm câu = thêm vào CUỐI (giữ id), câu "X nào lãi nhất" phải nhận cả người đứng đầu theo lãi trước lẫn sau QC,
   và `test_eval_seller_cases_pass_with_their_own_answer` phải qua (bắt số rơi vào vùng năm 1900–2100, NaN);
   Gemini free tier: chạy với `--delay 8`, câu `source=fallback` do quota thì chạy lại rồi `--merge` (merge chấm lại từ câu đã lưu);

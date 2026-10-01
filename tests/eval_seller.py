@@ -2,9 +2,9 @@
 """
 eval_seller.py — đo đúng lời hứa của SellerLens trên shop MÔ PHỎNG (data/samples/shop_lan).
 
-166 câu hỏi tự nhiên (có/không dấu), chia theo 3 cách nạp:
+167 câu hỏi tự nhiên (có/không dấu), chia theo 3 cách nạp:
   A = đủ file (2 export + giá vốn + quảng cáo), 103 câu   B = chỉ 2 export (không giá vốn), 36 câu
-  C = export + bảng giá vốn thiếu 50/150 SKU, 27 câu
+  C = export + bảng giá vốn thiếu 50/150 SKU, 28 câu
 Câu 1–25 là bộ gốc (giữ nguyên id để so với lần chạy cũ); câu mới chỉ thêm vào cuối.
 
 Chỉ số (docs/PM_FEEDBACK_2026-09-26.md §5):
@@ -29,7 +29,7 @@ import json
 import re
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -72,11 +72,14 @@ def ground_truth() -> dict:
     # Mode C: SKU ngoài 100 dòng đầu bảng sản phẩm không có giá vốn → app tính giá vốn = 0 cho các đơn đó.
     known = set(pd.read_csv(SHOP / "products.csv").head(100)["sku"])
     o["pre_c"] = o["pre"] + o["gia_von"].where(done & ~o["sku"].isin(known), 0)
+    # Danh mục cũng đến từ bảng sản phẩm: SKU ngoài bảng → một nhóm riêng (app gọi là "(chưa có danh mục)").
+    o["danh_muc_c"] = o["danh_muc"].where(o["sku"].isin(known), "(chưa có danh mục)")
     o["hoan"] = ret.astype(float).where(o["trang_thai"] != "Đã huỷ")  # mean = tỷ lệ hoàn
     o["xong"] = done
     o["thang"], o["quy"] = o["ngay_dat"].dt.month, o["ngay_dat"].dt.quarter
     ads["thang"] = ads["ngay"].dt.month
     wk = ads[(ads["kenh"] == "TikTok Shop") & ads["ngay"].between("2026-06-01", "2026-06-07")]["chi_phi_qc"]
+    names = o.groupby("sku")["ten_san_pham"].first()  # "sản phẩm nào lỗ": mã SKU hay tên đều là trả lời đúng
 
     def by(*cols: str) -> pd.DataFrame:
         return o.groupby(list(cols)).agg(
@@ -89,7 +92,7 @@ def ground_truth() -> dict:
         "aov": [o["rev"].sum() / done.sum(), o.loc[done, "doanh_thu"].mean()],
         # S3: tổng/trung bình tuần 23 hoặc chính các ngày tăng vọt đều là câu trả lời đúng.
         "ads_week": [wk.sum(), wk.mean(), *wk.tolist()],
-        "s1": truth["S1_fee_hike"], "s2": [r["sku"] for r in truth["S2_loss_skus"]], "s4": truth["S4_return_spike"],
+        "s1": truth["S1_fee_hike"], "s2": [[r["sku"], names[r["sku"]]] for r in truth["S2_loss_skus"]], "s4": truth["S4_return_spike"],
     }
 
 
@@ -115,12 +118,15 @@ class Case:
     expect: list            # số (number) hoặc chuỗi (contains: phải có ĐỦ; contains_any dùng list lồng)
     profit: bool = False    # tính vào north star
     scenario: str = ""
+    # Số đúng nhưng chưa phải câu trả lời (hỏi "tăng bao nhiêu", trả lời phí 2 tháng): trượt, không phải 🚨.
+    near: list = field(default_factory=list)
 
 
 def cases(t: dict) -> list[Case]:
     by, qc = t["by"], t["qc"]
     mo, q, ch, cat, prov, car, sku = (by(c) for c in ("thang", "quy", "kenh", "danh_muc", "tinh", "don_vi_van_chuyen", "sku"))
     chm, tot = by("kenh", "thang"), by("thang").sum()  # tot: chỉ dùng cột cộng được (không dùng hoan)
+    cat_c = by("danh_muc_c")  # mode C: danh mục chỉ biết cho SKU có trong bảng giá vốn
     qc_m, qc_chm = qc.groupby("thang")["chi_phi_qc"].sum(), qc.groupby(["kenh", "thang"])["chi_phi_qc"].sum()
     rate, ch_rate = mo.fee / mo.rev, ch.fee / ch.rev
     sh, tt = "Shopee", "TikTok Shop"
@@ -226,7 +232,8 @@ def cases(t: dict) -> list[Case]:
         Case(78, "A", "Tổng phí sàn TikTok Shop", "number", [ch.fee[tt]], True),
         Case(79, "A", "Tỷ lệ phí sàn tháng 4", "contains", [pct(rate[4])], True),
         Case(80, "A", "Tỷ lệ phí sàn tháng 5 là bao nhiêu %?", "contains", [pct(rate[5])], True),
-        Case(81, "A", "Phí sàn tháng 5 tăng bao nhiêu so với tháng 4?", "number", fee_up, True),
+        Case(81, "A", "Phí sàn tháng 5 tăng bao nhiêu so với tháng 4?", "number", fee_up, True,
+             near=[mo.fee[4], mo.fee[5]]),
         Case(82, "A", "Phí sàn trung bình mỗi đơn hoàn thành", "number", [tot.fee / tot.xong], True),
         # ── A: hoàn hàng ──
         Case(83, "A", "Tổng phí ship hoàn hàng 6 tháng", "number", [tot.ship_hoan], True),
@@ -285,7 +292,8 @@ def cases(t: dict) -> list[Case]:
         Case(132, "B", "Phí sàn tháng 5", "number", [mo.fee[5]], True),
         Case(133, "B", "Phí sàn TikTok 6 tháng", "number", [ch.fee[tt]], True),
         Case(134, "B", "Tỷ lệ phí sàn tháng 6", "contains", [pct(rate[6])], True),
-        Case(135, "B", "Phí sàn tháng 5 tăng bao nhiêu so với tháng 4?", "number", fee_up, True),
+        Case(135, "B", "Phí sàn tháng 5 tăng bao nhiêu so với tháng 4?", "number", fee_up, True,
+             near=[mo.fee[4], mo.fee[5]]),
         Case(136, "B", "Tỷ lệ hoàn tháng 3", "contains", [pct(mo.hoan[3])], True),
         Case(137, "B", "Tỉnh nào doanh thu thuần cao nhất?", "number", [prov.rev.max()], True),
         Case(138, "B", "SKU doanh thu cao nhất", "contains", [sku.rev.idxmax()], True),
@@ -304,8 +312,9 @@ def cases(t: dict) -> list[Case]:
         Case(150, "C", "Lãi theo kênh", "warn", [ch.pre_c[sh], ch.pre_c[tt]], True),
         Case(151, "C", "Shopee lãi bao nhiêu?", "warn", [ch.pre_c[sh]], True),
         Case(152, "C", "TikTok lãi bao nhiêu?", "warn", [ch.pre_c[tt]], True),
-        Case(153, "C", "Danh mục Chân váy lãi bao nhiêu?", "warn", [cat.pre_c["Chân váy"]], True),  # nhóm thiếu giá vốn nhiều nhất
-        Case(154, "C", "Lãi theo danh mục", "warn", cat.pre_c.tolist(), True),
+        # Mọi SKU Chân váy nằm ngoài bảng giá vốn → app không biết danh mục này; phải nói ra, không đưa số.
+        Case(153, "C", "Danh mục Chân váy lãi bao nhiêu?", "contains", ["chưa có danh mục"], True),
+        Case(154, "C", "Lãi theo danh mục", "warn", cat_c.pre_c.tolist(), True),
         Case(155, "C", "Tỉnh nào lãi nhiều nhất?", "warn", [prov.pre_c.max()], True),
         Case(156, "C", "SKU nào lãi nhiều nhất?", "warn", [sku.pre_c.idxmax()], True),
         Case(157, "C", "Lãi quý 2", "warn", [q.pre_c[2]], True),
@@ -318,6 +327,7 @@ def cases(t: dict) -> list[Case]:
         Case(164, "C", "Tổng doanh thu thuần 6 tháng", "number", [tot.rev], True),
         Case(165, "C", "SKU doanh thu cao nhất", "contains", [sku.rev.idxmax()], True),
         Case(166, "C", "file này có gì?", "contains", ["50 SKU"]),
+        Case(167, "C", "Danh mục Quần lãi bao nhiêu?", "warn", [cat_c.pre_c["Quần"]], True),  # chỉ phần SKU có trong bảng
     ]
 
 
@@ -360,7 +370,8 @@ def score(case: Case, answer: str) -> tuple[bool, bool]:
         ok = all(any(x.lower() in low for x in (e if isinstance(e, list) else [e])) for e in case.expect)
         return ok, False
     hit = any(abs(n - abs(e)) <= TOL * abs(e) for n in nums for e in case.expect)
-    return hit, bool(nums) and not hit and not warned
+    near = any(abs(n - abs(e)) <= TOL * abs(e) for n in nums for e in case.near)
+    return hit, bool(nums) and not hit and not warned and not near
 
 
 # ── Chạy ────────────────────────────────────────────────────────────────────────
