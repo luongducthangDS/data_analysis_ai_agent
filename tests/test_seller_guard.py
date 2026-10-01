@@ -320,10 +320,12 @@ def test_seller_endpoints(client):
 def test_eval_seller_cases_pass_with_their_own_answer():
     """Mỗi câu của eval_seller phải chấm ĐẠT được bằng chính đáp án: bắt đáp án NaN, số < 1000
     hay rơi vào vùng năm 1900–2100 (bị numbers() bỏ), id trùng/nhảy cóc — không cần chạy server."""
-    from tests.eval_seller import REFUSAL, WARNING, cases, ground_truth, score
-    all_cases = cases(ground_truth())
-    assert [c.id for c in all_cases] == list(range(1, len(all_cases) + 1)) and len(all_cases) >= 150
-    for c in all_cases:
+    from tests.eval_seller import REFUSAL, WARNING, cases, ground_truth, heldout_cases, score
+    t = ground_truth()
+    dev, heldout = cases(t), heldout_cases(t)
+    assert [c.id for c in dev] == list(range(1, len(dev) + 1)) and len(dev) >= 150
+    assert [c.id for c in heldout] == list(range(1001, 1001 + len(heldout))) and len(heldout) >= 20
+    for c in dev + heldout:
         parts = [e[0] if isinstance(e, list) else e for e in c.expect]
         text = " ".join(p if isinstance(p, str) else f"{p:,.0f} đ".replace(",", ".") for p in parts)
         text += {"refuse": " " + REFUSAL[0], "warn": " " + WARNING[0]}.get(c.kind, "")

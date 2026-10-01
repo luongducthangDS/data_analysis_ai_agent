@@ -6,6 +6,8 @@ eval_seller.py — đo đúng lời hứa của SellerLens trên shop MÔ PHỎN
   A = đủ file (2 export + giá vốn + quảng cáo), 103 câu   B = chỉ 2 export (không giá vốn), 36 câu
   C = export + bảng giá vốn thiếu 50/150 SKU, 28 câu
 Câu 1–25 là bộ gốc (giữ nguyên id để so với lần chạy cũ); câu mới chỉ thêm vào cuối.
+Bộ dev đã được dùng để sửa app → điểm trên nó lạc quan. Bộ HELD-OUT (`--heldout`, id 1001+, 30 câu) viết sau
+đợt sửa và commit trước lần chạy đầu: không sửa app theo nó.
 
 Chỉ số (docs/PM_FEEDBACK_2026-09-26.md §5):
   • north star  — % câu về lãi/phí/hoàn trả số khớp đáp án ±2%, hoặc từ chối/cảnh báo đúng khi thiếu dữ liệu (mục tiêu ≥ 90%)
@@ -331,6 +333,61 @@ def cases(t: dict) -> list[Case]:
     ]
 
 
+def heldout_cases(t: dict) -> list[Case]:
+    """Bộ HELD-OUT (id 1001+), viết 2026-10-01 SAU đợt sửa app theo bộ dev và commit TRƯỚC lần chạy đầu tiên.
+
+    Không sửa app dựa trên các câu này (sửa = bộ này thành dev, phải viết bộ mới). Chỉ được sửa đáp án khi chính
+    đáp án sai. Diễn đạt khác bộ dev: viết tắt, không dấu, kết hợp nhiều bộ lọc.
+    """
+    by, qc = t["by"], t["qc"]
+    mo, cat, prov, car, sku = (by(c) for c in ("thang", "danh_muc", "tinh", "don_vi_van_chuyen", "sku"))
+    chm, chq, prm, tot = by("kenh", "thang"), by("kenh", "quy"), by("tinh", "thang"), mo.sum()
+    qc_chm = qc.groupby(["kenh", "thang"])["chi_phi_qc"].sum()
+    sh, tt = "Shopee", "TikTok Shop"
+    nodata = [["30/06/2026", "không có"]]
+
+    def lai(f: pd.DataFrame, k) -> list[float]:
+        return [f.pre[k], f.net[k]]
+
+    return [
+        # ── A: đủ file ──
+        Case(1001, "A", "shopee thang 2 lai bnhieu", "number", lai(chm, (sh, 2)), True),
+        Case(1002, "A", "Lợi nhuận kênh TikTok quý 1", "number", lai(chq, (tt, 1)), True),
+        Case(1003, "A", "DT thuần Shopee tháng 4", "number", [chm.rev[(sh, 4)]], True),
+        Case(1004, "A", "phí sàn tiktok tháng 5 là bn", "number", [chm.fee[(tt, 5)]], True),
+        Case(1005, "A", "tỷ lệ phí sàn của Shopee tháng 6", "contains", [pct(chm.fee[(sh, 6)] / chm.rev[(sh, 6)])], True),
+        Case(1006, "A", "Hà Nội tháng 6 doanh thu thuần được bao nhiêu", "number", [prm.rev[("Hà Nội", 6)]], True),
+        Case(1007, "A", "Đơn ship về TP.HCM bị hoàn bao nhiêu phần trăm?", "contains", [pct(prov.hoan["TP.HCM"])], True),
+        Case(1008, "A", "GHN hoàn hàng nhiều không, tỷ lệ bao nhiêu", "contains", [pct(car.hoan["GHN"])], True),
+        Case(1009, "A", "lãi ròng shopee tháng 6 sau khi trừ ads", "number", [chm.net[(sh, 6)]], True),
+        Case(1010, "A", "Tiền chạy quảng cáo Shopee tháng 3 hết bao nhiêu", "number", [qc_chm[(sh, 3)]]),
+        Case(1011, "A", "Nhóm Áo bán được bao nhiêu doanh thu thuần?", "number", [cat.rev["Áo"]], True),
+        Case(1012, "A", "danh muc phu kien lai bao nhieu", "number", lai(cat, "Phụ kiện"), True),
+        Case(1013, "A", "sku LAN-122 doanh thu thuần bao nhiêu", "number", [sku.rev["LAN-122"]], True),
+        Case(1014, "A", "Lãi trước quảng cáo từ tháng 5 đến hết tháng 6", "number", [mo.pre[5] + mo.pre[6]], True),
+        Case(1015, "A", "Nửa đầu năm shop lãi ròng bao nhiêu?", "number", [tot.net], True),
+        Case(1016, "A", "Đơn vị vận chuyển nào ít bị hoàn nhất?", "contains", [car.hoan.idxmin().split()[0]], True),
+        Case(1017, "A", "Tỉnh nào doanh thu thuần thấp nhất?", "contains", [prov.rev.idxmin()], True),
+        Case(1018, "A", "ty suat loi nhuan thang 1", "contains",
+             [pct(mo.pre[1] / mo.rev[1]) + pct(mo.net[1] / mo.rev[1])], True),
+        Case(1019, "A", "Bitcoin hôm nay tăng hay giảm?", "no_numbers", []),
+        Case(1020, "A", "doanh thu thuần tháng 9", "contains", nodata, True),
+        Case(1021, "A", "Phí QC TikTok tháng 4", "number", [qc_chm[(tt, 4)]]),
+        Case(1022, "A", "Shopee tháng 3 hoàn bao nhiêu %", "contains",
+             [pct(by("kenh", "thang").hoan[(sh, 3)])], True),
+        # ── B: không giá vốn ──
+        Case(1023, "B", "lãi shopee tháng 3", "refuse", [], True),
+        Case(1024, "B", "Biên lợi nhuận tháng 6", "refuse", [], True),
+        Case(1025, "B", "Tỷ lệ phí sàn TikTok tháng 5", "contains", [pct(chm.fee[(tt, 5)] / chm.rev[(tt, 5)])], True),
+        Case(1026, "B", "doanh thu thuan Nghe An", "number", [prov.rev["Nghệ An"]], True),
+        Case(1027, "B", "Doanh thu theo danh mục", "no_numbers", []),  # export không có danh mục
+        # ── C: thiếu giá vốn 50/150 SKU ──
+        Case(1028, "C", "Lãi Shopee tháng 4", "warn", [chm.pre_c[(sh, 4)]], True),
+        Case(1029, "C", "lai tiktok quy 2", "warn", [chq.pre_c[(tt, 2)]], True),
+        Case(1030, "C", "SKU LAN-140 lãi bao nhiêu", "warn", [sku.pre_c["LAN-140"]], True),  # SKU thiếu giá vốn
+    ]
+
+
 # ── Chấm ────────────────────────────────────────────────────────────────────────
 
 _UNIT = {"tỷ": 1e9, "ty": 1e9, "triệu": 1e6, "trieu": 1e6, "tr": 1e6, "nghìn": 1e3, "ngàn": 1e3, "k": 1e3}
@@ -423,17 +480,19 @@ def main() -> int:
     ap.add_argument("--delay", type=float, default=0.0,
                     help="Giãn cách giữa các câu (giây). Gemini free tier 15 request/phút/model, mỗi câu ~2 lượt gọi")
     ap.add_argument("--merge", nargs="+", help="Gộp các file --out (file sau ghi đè câu trùng id), không gọi server")
+    ap.add_argument("--heldout", action="store_true", help="Chạy bộ held-out (id 1001+) thay cho bộ dev")
     args = ap.parse_args()
     if args.merge:  # vd chạy lại các câu rơi xuống fallback vì hết quota rồi gộp với lần chạy chính
         by_id = {r["id"]: r for f in args.merge for r in json.loads(Path(f).read_text(encoding="utf-8"))["rows"]}
         # Chấm lại câu trả lời đã lưu bằng đáp án/bộ chấm hiện tại: sửa bộ chấm không cần gọi lại LLM.
-        current = {c.id: c for c in cases(ground_truth())}
+        t = ground_truth()
+        current = {c.id: c for c in cases(t) + heldout_cases(t)}
         rows = []
         for k in sorted(by_id):
             ok, wrong = score(current[k], by_id[k]["answer"])
             rows.append({**by_id[k], **asdict(current[k]), "ok": ok, "wrong_looks_right": wrong})
     else:
-        rows = run(args.base_url.rstrip("/"), _ids(args.ids), args.delay)
+        rows = run(args.base_url.rstrip("/"), _ids(args.ids), args.delay, heldout_cases if args.heldout else cases)
     summary = summarize(rows)
     print("\n" + json.dumps(summary, ensure_ascii=False))
     if args.out:
@@ -443,8 +502,8 @@ def main() -> int:
     return 1 if summary["wrong_looks_right"] else 0
 
 
-def run(base: str, wanted: set[int] | None, delay: float) -> list[dict]:
-    todo = [c for c in cases(ground_truth()) if not wanted or c.id in wanted]
+def run(base: str, wanted: set[int] | None, delay: float, pool=cases) -> list[dict]:
+    todo = [c for c in pool(ground_truth()) if not wanted or c.id in wanted]
     sessions = {m: upload(base, m) for m in sorted({c.mode for c in todo})}
     rows = []
     for i, c in enumerate(todo):
