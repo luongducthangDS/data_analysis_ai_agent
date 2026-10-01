@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from typing import Callable, TypedDict
 
 import requests
-import backend.app.core.config  # noqa: F401 — nạp .env (một chỗ duy nhất, xem config.py)
+from backend.app.core.config import get_settings  # import này cũng nạp .env (một chỗ duy nhất, xem config.py)
 
 from backend.app.services import usage
 
@@ -162,9 +162,8 @@ class OpenRouterLLMClient:
     rate-limited / unavailable free model advances to the next.
     """
 
-    BASE_URL = "https://openrouter.ai/api/v1"
-
     def __init__(self, model: str | None = None):
+        self.base_url = get_settings().openrouter_base_url.rstrip("/")
         self.api_token = os.getenv("OPENROUTER_API_KEY", "")
         self.model_id = model or _openrouter_models()[0]
         self.headers = {
@@ -186,7 +185,7 @@ class OpenRouterLLMClient:
         }
         with usage.track(self.model_id) as call:
             resp = requests.post(
-                f"{self.BASE_URL}/chat/completions",
+                f"{self.base_url}/chat/completions",
                 headers=self.headers,
                 json=payload,
                 timeout=_call_timeout(60),
@@ -376,14 +375,15 @@ def _env_provider_specs(forced: str) -> list[_ProviderSpec]:
     return specs
 
 
-_client: FailoverLLMClient | None = None
+_clients: dict[str, FailoverLLMClient] = {}  # theo provider đã ghim ("" = auto)
 
 
-def get_llm_client() -> FailoverLLMClient:
+def get_llm_client(provider: str = "") -> FailoverLLMClient:
     """
     Return a FailoverLLMClient.
     Priority: user-supplied header keys (per request) → env-var provider chain.
     Set LLM_PROVIDER env var (or X-LLM-Provider header) to pin one provider.
+    `provider` ghim provider cho riêng lần gọi này (vd bước synthesize dùng model khác bước plan).
     """
     rk = _request_keys.get()
 
@@ -400,19 +400,17 @@ def get_llm_client() -> FailoverLLMClient:
         if specs:
             return FailoverLLMClient(specs)
 
-    global _client
-    if _client is not None:
-        return _client
-
-    forced = os.getenv("LLM_PROVIDER", "").lower()
+    forced = (provider or os.getenv("LLM_PROVIDER", "")).lower()
+    if forced in _clients:
+        return _clients[forced]
     specs = _env_provider_specs(forced)
     if not specs:
         raise RuntimeError(
             "Không có LLM provider nào khả dụng. "
             "Set GEMINI_API_KEY, OPENROUTER_API_KEY, hoặc nhập API key trong Settings UI."
         )
-    _client = FailoverLLMClient(specs)
-    return _client
+    _clients[forced] = FailoverLLMClient(specs)
+    return _clients[forced]
 
 
 def get_active_provider() -> str:

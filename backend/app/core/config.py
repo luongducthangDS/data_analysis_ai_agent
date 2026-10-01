@@ -17,8 +17,12 @@ class Settings(BaseSettings):
     # OpenRouter fallback — chuỗi model free thử lần lượt khi Gemini sập.
     openrouter_api_key: str = ""
     openrouter_models: str = ""  # comma-separated; trống = dùng default list trong llm_service
+    # Server khác cùng chuẩn OpenAI (vd vLLM tự host: http://localhost:8001/v1) — dùng với LLM_PROVIDER=openrouter.
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Chuỗi fallback khi llm_provider=auto: Gemini → OpenRouter (nhiều model)
     llm_provider: str = "auto"  # auto | gemini | openrouter
+    # Bước viết câu trả lời dùng provider khác bước plan (vd "openrouter" trỏ vLLM); trống = như LLM_PROVIDER.
+    llm_provider_synthesize: str = ""
 
     # Observability
     langsmith_api_key: str = ""

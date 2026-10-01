@@ -127,7 +127,7 @@ def test_build_source_frame_bad_join_falls_back():
 def offline(monkeypatch):
     from backend.app.agents.nodes import respond
 
-    def boom():
+    def boom(*_):
         raise RuntimeError("LLM disabled in test")
 
     monkeypatch.setattr("backend.app.services.llm_service.get_llm_client", boom)
