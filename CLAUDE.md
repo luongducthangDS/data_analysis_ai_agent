@@ -52,6 +52,8 @@
 - Metric tiền (lãi, phí sàn) định nghĩa MỘT chỗ ở `backend/app/services/ecommerce_semantic.py`, tính sẵn lúc nạp file
   (`SessionStore._normalize_frame`). LLM chỉ sum các cột này, không tự ghép công thức. `loi_nhuan_truoc_qc` CHƯA trừ quảng cáo.
 - File export sàn: thêm định dạng mới = thêm 1 dict vào `EXPORT_HEADERS`; giá vốn ghép từ bảng `sku, gia_von` qua `attach_cogs`.
+- Giá trị LLM lọc/nhóm được phải đồng nhất từ lúc nạp (trạng thái đơn: `EXPORT_STATUS`), không chỉ trong công thức metric;
+  số backend đưa vào prompt (ghi chú dữ liệu) phải nằm trong tập số được phép của `_numbers_grounded(notes=...)`.
 - "Vì sao lãi đổi" = action `profit_bridge` (`ecommerce_semantic.profit_bridge`): 4 hạng mục cộng lại PHẢI bằng Δ lãi
   (giá vốn lấy phần dư). Gợi ý hành động sinh tất định ở `bridge_actions`, LLM không tự nghĩ; test bám đáp án S1/S4.
 - Thêm action mới cho planner: sửa CẢ `ALLOWED_ACTIONS` (`services/planner/execute.py`) lẫn `_ALLOWED_ACTIONS` + `_ACTION_ALIASES` (`agents/nodes/plan.py`).

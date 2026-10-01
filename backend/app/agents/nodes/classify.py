@@ -20,7 +20,7 @@ def classify_node(state: AgentState) -> AgentState:
     if intent == "data_query":
         notice = _missing_cogs(state.get("session_id", ""), question)
         if notice:
-            _log.info("classify_node: profit question without COGS → needs_cogs")
+            _log.info("classify_node: question needs COGS/category the session lacks → needs_cogs")
             return {**state, "intent": "needs_cogs", "answer": notice}
     _log.info("classify_node: question=%r → intent=%r", question[:60], intent)
     return {**state, "intent": intent}
@@ -35,10 +35,11 @@ def _lost_sheet(session_id: str) -> str | None:
 
 
 def _missing_cogs(session_id: str, question: str) -> str | None:
-    from backend.app.services.ecommerce_semantic import missing_cogs_notice
+    from backend.app.services.ecommerce_semantic import missing_category_notice, missing_cogs_notice
     from backend.app.services.storage import session_store
     try:
-        return missing_cogs_notice(session_store.get(session_id).dataframe, question)
+        df = session_store.get(session_id).dataframe
+        return missing_cogs_notice(df, question) or missing_category_notice(df, question)
     except KeyError:
         return None
 

@@ -10,11 +10,16 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from backend.app.agents.nodes.synthesize import _no_rows_answer
+from backend.app.agents.nodes.synthesize import _no_rows_answer, _numbers_grounded
+from backend.app.services.planner.answer import _deterministic_answer
 from backend.app.services.planner.execute import execute_plan
 from backend.app.services.planner.fallback import build_fallback_plan
-from backend.app.services.planner.llm_plan import _repair_filter_values
-from backend.app.services.ecommerce_semantic import asks_profit, cogs_gap
+from backend.app.services.planner.llm_plan import (
+    _repair_filter_values, _repair_ratio_denominator, _repair_status_filter,
+)
+from backend.app.services.ecommerce_semantic import (
+    NO_CATEGORY, asks_profit, cogs_gap, fmt_num, missing_category_notice, profit_notes,
+)
 from backend.app.services.storage import SessionStore
 from scripts.gen_shop_lan import PARAMS
 
@@ -133,6 +138,89 @@ def test_shop_summary_says_what_is_linked(full, no_cogs, offline):
 
 
 # ── Tỷ lệ, bộ lọc, thời gian, không bịa ─────────────────────────────────────────────────────
+
+# ── Lỗi chung mọi model (eval_seller 2026-10-01) ────────────────────────────────────────────
+
+def test_tiktok_status_uses_the_same_values_as_shopee(full):
+    df = full.dataframe
+    assert set(df["trang_thai"].unique()) == {"Hoàn thành", "Đã trả hàng", "Đã huỷ"}
+    plan = {"action": "aggregate", "filters": [{"column": "trang_thai", "operator": "eq", "value": "Hoàn thành"}],
+            "metrics": [{"column": "ma_don", "aggregation": "count", "label": "n"}]}
+    orders = pd.read_csv(SHOP / "shop_lan_orders.csv")
+    # Từng ra 6.307 = riêng Shopee: đơn TikTok mang trạng thái "Completed" (#101, #103, #142).
+    assert execute_plan(df, plan)["n"].iloc[0] == (orders["trang_thai"] == "Hoàn thành").sum()
+
+
+def test_category_comes_from_the_product_table(full, partial):
+    orders = pd.read_csv(SHOP / "shop_lan_orders.csv")
+    got = full.dataframe.groupby("sku")["danh_muc"].first()
+    assert got.to_dict() == orders.groupby("sku")["danh_muc"].first().to_dict()
+    # Bảng giá vốn thiếu 50 SKU: các SKU đó vào nhóm riêng, tổng theo danh mục không rơi mất doanh thu nào.
+    df = partial.dataframe
+    assert set(df.loc[df["danh_muc"] == NO_CATEGORY, "sku"]) == set(cogs_gap(df)["skus"])
+    assert df.groupby("danh_muc")["doanh_thu_thuan"].sum().sum() == pytest.approx(df["doanh_thu_thuan"].sum())
+
+
+def test_category_question_without_product_table_is_refused(full, no_cogs, offline):
+    out = _ask(no_cogs, "Doanh thu thuần theo danh mục")
+    assert out.source == "deterministic" and "Chưa có danh mục" in out.answer
+    assert not any(ch.isdigit() for ch in out.answer)  # không thay danh mục bằng tên sản phẩm rồi đưa số (#60)
+    assert missing_category_notice(no_cogs.dataframe, "Doanh thu thuần theo kênh") is None
+    assert missing_category_notice(full.dataframe, "Lãi theo danh mục") is None
+
+
+def test_rate_denominator_is_net_revenue(full):
+    df = full.dataframe
+    plan = {"action": "aggregate", "group_by": ["kenh"],
+            "metrics": [{"column": "phi_san", "aggregation": "sum", "label": "Phí"},
+                        {"column": "doanh_thu", "aggregation": "sum"}],  # không label: tham chiếu bằng tên mặc định
+            "ratios": [{"label": "Tỷ lệ phí", "numerator": "Phí", "denominator": "sum_doanh_thu"}]}
+    got = execute_plan(df, _repair_ratio_denominator(plan, df)).set_index("kenh")["Tỷ lệ phí"]
+    sums = df.groupby("kenh")[["phi_san", "doanh_thu_thuan"]].sum()
+    # Chia cho doanh_thu gộp cả đơn huỷ/hoàn từng ra TikTok 27,0% thay vì 34,5% (#141).
+    assert got.to_dict() == pytest.approx((sums["phi_san"] / sums["doanh_thu_thuan"]).round(4).to_dict())
+    plain = {"action": "aggregate", "metrics": [{"column": "doanh_thu", "aggregation": "sum"}]}
+    assert _repair_ratio_denominator(plain, df) == plain
+
+
+def test_profit_ignores_completed_only_filter(full):
+    df = full.dataframe
+    tiktok = {"column": "kenh", "operator": "eq", "value": "TikTok Shop"}
+    done = {"column": "trang_thai", "operator": "eq", "value": "Hoàn thành"}
+    plan = {"action": "aggregate", "filters": [tiktok, done],
+            "metrics": [{"column": "loi_nhuan_rong", "aggregation": "sum", "label": "Lãi ròng"}]}
+    got = execute_plan(df, _repair_status_filter(plan, df))["Lãi ròng"].iloc[0]
+    # Lọc đơn hoàn thành bỏ mất phí ship của đơn hoàn: TikTok ra 74,6 tr thay vì 59,8 tr (#41).
+    assert got == pytest.approx(df.loc[df["kenh"] == "TikTok Shop", "loi_nhuan_rong"].sum())
+    count = {"action": "aggregate", "filters": [done], "metrics": [{"column": "ma_don", "aggregation": "count"}]}
+    assert _repair_status_filter(count, df) == count  # "bao nhiêu đơn hoàn thành" vẫn cần filter
+
+
+def test_numbers_from_data_notes_may_be_quoted_but_not_invented(partial):
+    df = partial.dataframe
+    notes = profit_notes(df, {"metrics": [{"column": "loi_nhuan_truoc_qc"}]})
+    result = pd.DataFrame({"kenh": ["Shopee"], "Lãi": [480_593_360.0]})
+    quoted = f"Lãi Shopee là 480.593.360 đ, có {fmt_num(cogs_gap(df)['orders'])} đơn chưa có giá vốn."
+    # Mode C: mọi câu trả lời của LLM nhắc số đơn thiếu giá vốn đều bị chặn.
+    assert _numbers_grounded(quoted, result, notes=notes)
+    assert not _numbers_grounded(quoted, result)
+    assert not _numbers_grounded("Lãi Shopee là 999.999.999 đ.", result, notes=notes)
+
+
+def test_rates_print_as_percent_in_deterministic_answer():
+    plan = {"action": "aggregate",
+            "metrics": [{"column": "phi_san", "aggregation": "sum", "label": "Phí"},
+                        {"column": "doanh_thu_thuan", "aggregation": "sum", "label": "DT"}],
+            "ratios": [{"label": "Tỷ lệ phí", "numerator": "Phí", "denominator": "DT"}]}
+    result = pd.DataFrame({"Phí": [141_360_285.0], "DT": [421_971_000.0], "Tỷ lệ phí": [0.335]})
+    text = _deterministic_answer("Tỷ lệ phí sàn tháng 4", result, plan)
+    assert "33,5%" in text and "0,335" not in text and "141.360.285" in text
+    rate = {"action": "aggregate", "group_by": ["tinh"],
+            "metrics": [{"column": "la_don_hoan", "aggregation": "mean", "label": "Tỷ lệ hoàn"}]}
+    ranked = pd.DataFrame({"tinh": ["Nghệ An", "Hà Nội"], "Tỷ lệ hoàn": [0.1552, 0.1175]})
+    text = _deterministic_answer("Tỷ lệ hoàn theo tỉnh", ranked, rate)
+    assert "15,5%" in text and "Tổng" not in text  # cộng/tỷ trọng các tỷ lệ là số vô nghĩa
+
 
 def test_fee_rate_by_channel_is_ratio_of_sums(full):
     plan = {"action": "aggregate", "group_by": ["kenh"],

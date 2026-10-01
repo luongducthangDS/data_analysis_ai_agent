@@ -11,7 +11,7 @@ import plotly.express as px
 from backend.app.services.ecommerce_semantic import (
     bridge_actions, fmt_num, fmt_pct,
 )
-from backend.app.services.planner.execute import _apply_filters, _describe_numeric, _normalize
+from backend.app.services.planner.execute import _apply_filters, _describe_numeric, _metric_label, _normalize
 
 
 def _build_charts_from_result(result: pd.DataFrame, plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -119,26 +119,42 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
             )
         return "\n".join(lines)
 
+    rates = _rate_columns(plan)
     numeric_cols = result.select_dtypes(include="number").columns.tolist()
     if len(numeric_cols) > 1:
         # Nhiều chỉ số (vd doanh thu + lãi): xếp hạng theo cột đầu sẽ giấu mất cột lãi → in cả bảng.
-        lines.append(_frame_to_markdown(result))
+        lines.append(_frame_to_markdown(result, rates=rates))
         return "\n".join(lines)
     if len(result.columns) >= 2 and numeric_cols:
         dim = result.columns[0]
         metric = numeric_cols[0]
+        is_rate = metric in rates  # tổng/tỷ trọng của các tỷ lệ là số vô nghĩa
         total = sum(float(r[metric]) for r in result.to_dict(orient="records") if r[metric] is not None)
         lines.append("### Xếp hạng / kết quả")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
             val = row[metric]
-            pct = f" ({fmt_pct(float(val) / total)})" if total and val is not None else ""
-            lines.append(f"{index}. {row[dim]}: {_format_cell(val)}{pct}")
-        if len(result) > 1:
+            pct = f" ({fmt_pct(float(val) / total)})" if total and val is not None and not is_rate else ""
+            lines.append(f"{index}. {row[dim]}: {_format_value(val, is_rate)}{pct}")
+        if len(result) > 1 and not is_rate:
             lines.append(f"\nTổng: {_format_cell(total)}")
         return "\n".join(lines)
 
-    lines.append(_frame_to_markdown(result))
+    lines.append(_frame_to_markdown(result, rates=rates))
     return "\n".join(lines)
+
+
+def _rate_columns(plan: dict[str, Any]) -> set[str]:
+    """Cột kết quả là tỷ lệ 0–1: ratios của plan và mean(la_don_hoan). In dạng 33,5%, không phải 0,3350."""
+    cols = {r.get("label") for r in plan.get("ratios") or [] if isinstance(r, dict)}
+    cols |= {_metric_label(m) for m in plan.get("metrics") or []
+             if isinstance(m, dict) and m.get("column") == "la_don_hoan" and m.get("aggregation") == "mean"}
+    return cols
+
+
+def _format_value(value: Any, is_rate: bool) -> str:
+    if is_rate and not pd.isna(value):
+        return fmt_pct(float(value))
+    return _format_cell(value)
 
 
 def _bridge_brief(result: pd.DataFrame) -> list[str]:
@@ -173,7 +189,7 @@ def _build_currency_warning(df: pd.DataFrame | None, plan: dict[str, Any]) -> st
     return None
 
 
-def _frame_to_markdown(df: pd.DataFrame, max_rows: int = 20) -> str:
+def _frame_to_markdown(df: pd.DataFrame, max_rows: int = 20, rates: set[str] = frozenset()) -> str:
     if df.empty:
         return "(no rows)"
     preview = df.head(max_rows).copy()
@@ -182,7 +198,7 @@ def _frame_to_markdown(df: pd.DataFrame, max_rows: int = 20) -> str:
     rows.append("| " + " | ".join(columns) + " |")
     rows.append("| " + " | ".join(["---"] * len(columns)) + " |")
     for record in preview.to_dict(orient="records"):
-        values = [_format_cell(record.get(col)) for col in preview.columns]
+        values = [_format_value(record.get(col), col in rates) for col in preview.columns]
         rows.append("| " + " | ".join(values) + " |")
     if len(df) > max_rows:
         rows.append(f"\n... còn {len(df) - max_rows} dòng")

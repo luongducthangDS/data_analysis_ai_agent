@@ -35,7 +35,8 @@ def plan_node(state: AgentState) -> AgentState:
     from backend.app.services.planner.fallback import build_fallback_plan
     from backend.app.services.planner.llm_plan import (
         _build_planner_prompt, _repair_plan_for_question, _repair_who_plan, _repair_column_names,
-        _repair_id_to_name_group, _repair_filter_values, _build_multi_sheet_catalog,
+        _repair_id_to_name_group, _repair_filter_values, _repair_ratio_denominator, _repair_status_filter,
+        _build_multi_sheet_catalog,
     )
 
     question = state["question"]
@@ -72,6 +73,8 @@ def plan_node(state: AgentState) -> AgentState:
             validate_df, _ = build_source_frame(session, plan["source"])
         plan = _repair_column_names(plan, validate_df)
         plan = _repair_filter_values(plan, validate_df)
+        plan = _repair_ratio_denominator(plan, validate_df)
+        plan = _repair_status_filter(plan, validate_df)
         plan = _repair_who_plan(plan, question, validate_df)
         plan = _repair_id_to_name_group(plan, question, validate_df)
         plan = _repair_plan_for_question(plan, question)

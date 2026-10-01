@@ -29,6 +29,7 @@ METRICS: dict[str, str] = {
     "loi_nhuan_rong": "lãi SAU quảng cáo = loi_nhuan_truoc_qc − chi_phi_qc",
 }
 _BASE_METRICS = ("doanh_thu_thuan", "phi_san", "la_don_hoan", "loi_nhuan_truoc_qc")
+NO_CATEGORY = "(chưa có danh mục)"
 PROFIT_COLS = ("loi_nhuan_truoc_qc", "loi_nhuan_rong")
 
 # Từ khoá trong câu hỏi (đã bỏ dấu) → metric. Thứ tự quan trọng: cụm dài trước.
@@ -64,6 +65,13 @@ EXPORT_HEADERS: dict[str, dict[str, str]] = {
         "Province": "tinh", "Shipping Provider Name": "don_vi_van_chuyen",
     },
 }
+# Trạng thái đơn về MỘT bộ giá trị (theo Shopee). Gộp 2 sàn mà để "Completed" cạnh "Hoàn thành" thì
+# lọc trang_thai = "Hoàn thành" mất hết đơn TikTok: "có bao nhiêu đơn hoàn thành" ra 6.307 thay vì 9.918.
+# Trạng thái lạ giữ nguyên; metric vẫn phân loại được bằng _is_cancelled/_is_returned.
+EXPORT_STATUS: dict[str, dict[str, str]] = {
+    "TikTok Shop": {"Completed": "Hoàn thành", "Returned": "Đã trả hàng", "Cancelled": "Đã huỷ",
+                    "Canceled": "Đã huỷ"},
+}
 _DAYFIRST_CHANNELS = {"TikTok Shop"}  # "01/02/2026 ..." là 1/2, không phải 2/1
 _EXPORT_CORE = {"ma_don", "ngay_dat", "trang_thai", "sku", "doanh_thu", "giam_gia_shop", *FEE_COLS}
 
@@ -76,6 +84,8 @@ def rename_export_columns(df: pd.DataFrame) -> pd.DataFrame:
             out = df.rename(columns=present)
             if channel in _DAYFIRST_CHANNELS:
                 out["ngay_dat"] = pd.to_datetime(out["ngay_dat"], dayfirst=True, errors="coerce")
+            if channel in EXPORT_STATUS:
+                out["trang_thai"] = out["trang_thai"].replace(EXPORT_STATUS[channel])
             if "kenh" not in out.columns:
                 out["kenh"] = channel
             return out
@@ -93,15 +103,23 @@ def attach_cogs(sheets: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     if not catalogs:
         return sheets
     catalog = pd.concat(catalogs)
-    unit_cost = pd.to_numeric(catalog["gia_von"], errors="coerce").groupby(catalog["sku"].astype(str).str.strip()).last()
+    keys = catalog["sku"].astype(str).str.strip()
+    unit_cost = pd.to_numeric(catalog["gia_von"], errors="coerce").groupby(keys).last()
+    # File export không có danh mục; bảng sản phẩm thường có. Thiếu cột này thì LLM từng lấy tên sản phẩm
+    # trả lời "danh mục nào lãi nhất" (eval_seller #60).
+    category = catalog["danh_muc"].groupby(keys).last() if "danh_muc" in catalog.columns else None
     out = {}
     for key, df in sheets.items():
         if {"sku", "trang_thai"} <= set(df.columns) and "gia_von" not in df.columns:
+            sku = df["sku"].astype(str).str.strip()
             qty = pd.to_numeric(df["so_luong"], errors="coerce").fillna(1) if "so_luong" in df.columns else 1
             # SKU không có trong bảng sản phẩm → gia_von NaN, profit_notes báo cho người dùng.
             # Bỏ metric đã tính lúc nạp (chưa có giá vốn) để tính lại đủ cả lãi.
             df = df.drop(columns=[c for c in _BASE_METRICS if c in df.columns])
-            df = add_metric_columns(df.assign(gia_von=df["sku"].astype(str).str.strip().map(unit_cost) * qty))
+            df = add_metric_columns(df.assign(gia_von=sku.map(unit_cost) * qty))
+            if category is not None and "danh_muc" not in df.columns:
+                # SKU ngoài bảng sản phẩm vào nhóm riêng: tổng theo danh mục vẫn đủ, không lặng lẽ rơi mất đơn.
+                df = df.assign(danh_muc=sku.map(category).fillna(NO_CATEGORY))
         out[key] = df
     return out
 
@@ -334,8 +352,11 @@ def describe_metrics(df: pd.DataFrame) -> str:
     lines += [
         "  Hỏi lãi/lợi nhuận/lỗ → sum loi_nhuan_truoc_qc. Hỏi lãi ròng / sau quảng cáo → sum loi_nhuan_rong.",
         "  Hỏi doanh thu (thực nhận) → sum doanh_thu_thuan. KHÔNG BAO GIỜ dùng doanh_thu làm lãi.",
+        "  Metric trên đã tự xử lý trạng thái đơn: KHÔNG filter trang_thai khi tính lãi hay tỷ lệ hoàn "
+        "(lãi đã trừ phí ship của đơn hoàn; lọc đơn hoàn thành làm lãi cao hơn thật).",
         "  TỶ LỆ (% phí sàn, biên lãi) = tỷ số của 2 tổng → 2 metric sum + field \"ratios\":",
-        '  [{"label":"Tỷ lệ phí sàn","numerator":"<label metric phí>","denominator":"<label metric doanh thu>"}].',
+        '  [{"label":"Tỷ lệ phí sàn","numerator":"<label metric phí>","denominator":"<label metric doanh_thu_thuan>"}].',
+        "  Mẫu số tỷ lệ là doanh_thu_thuan, KHÔNG phải doanh_thu (doanh_thu gồm cả đơn huỷ/hoàn, phí và lãi thì không).",
         "  So sàn nào \"ăn phí nhiều hơn\" → so TỶ LỆ phí theo kenh, không so tổng tiền phí.",
         "  Tỷ lệ hoàn theo nhóm → mean la_don_hoan, kèm count ma_don để thấy cỡ nhóm; sort theo tỷ lệ.",
         "  Quảng cáo có gì bất thường / tăng vọt → time_series grain \"date\", sum chi_phi_qc (và doanh_thu_thuan),",
@@ -424,6 +445,20 @@ def missing_cogs_notice(df: pd.DataFrame, question: str) -> str | None:
         + (f"Nên điền trước các SKU doanh thu cao nhất: {', '.join(skus[:5])}.\n\n" if skus else "")
         + "Trong lúc chờ, em vẫn trả lời được doanh thu thuần, phí sàn và tỷ lệ hoàn."
     )
+
+
+_CATEGORY_WORDS = re.compile(r"\b(?:danh muc|nganh hang|category)\b")
+
+
+def missing_category_notice(df: pd.DataFrame, question: str) -> str | None:
+    """Hỏi theo danh mục mà bảng không có danh_muc → từ chối tất định, không để LLM thay bằng tên sản phẩm."""
+    if "doanh_thu_thuan" not in df.columns or "danh_muc" in df.columns:
+        return None
+    if not _CATEGORY_WORDS.search(_strip_marks(question.lower())):
+        return None
+    return ("**Chưa có danh mục sản phẩm.** File đơn hàng của sàn không ghi danh mục, nên em chưa chia theo danh mục "
+            "được.\n\nCách bổ sung: tải thêm bảng sản phẩm có cột `sku, danh_muc` (có thể chung bảng với `gia_von`) "
+            "cùng lúc với file export, rồi hỏi lại.")
 
 
 _ITEM_DIMS = {"sku", "ten_san_pham", "danh_muc", "tinh", "don_vi_van_chuyen"}

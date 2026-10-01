@@ -12,7 +12,7 @@ from backend.app.services.ecommerce_semantic import (
     describe_metrics,
 )
 from backend.app.services.security import sanitize_for_prompt
-from backend.app.services.planner.execute import _normalize
+from backend.app.services.planner.execute import _metric_label, _normalize
 from backend.app.services.planner.fallback import _find_name_col, _is_who_question
 
 _log = logging.getLogger(__name__)
@@ -309,6 +309,46 @@ def _repair_filter_values(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, A
         value = item.get("value")
         item["value"] = [_fix(col, v) for v in value] if isinstance(value, list) else _fix(col, value)
     return repaired
+
+
+def _repair_ratio_denominator(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, Any]:
+    """Tỷ lệ chia cho doanh_thu → doanh_thu_thuan khi bảng có semantic layer.
+
+    doanh_thu gồm cả đơn huỷ/hoàn, còn phí sàn và lãi chỉ tính trên đơn hoàn thành: tỷ lệ phí TikTok ra 27,0%
+    thay vì 34,5% (eval_seller #141). Ghim label trước khi đổi cột, vì label mặc định đi theo tên cột.
+    """
+    if "doanh_thu_thuan" not in df.columns or not plan.get("ratios"):
+        return plan
+    denominators = {r.get("denominator") for r in plan["ratios"] if isinstance(r, dict)}
+    repaired = json.loads(json.dumps(plan, default=str))
+    for metric in repaired.get("metrics") or []:
+        if isinstance(metric, dict) and metric.get("column") == "doanh_thu" and _metric_label(metric) in denominators:
+            metric["label"] = _metric_label(metric)
+            metric["column"] = "doanh_thu_thuan"
+            _log.info("_repair_ratio_denominator: %r → doanh_thu_thuan", metric["label"])
+    return repaired
+
+
+# Metric đã tự xử lý trạng thái đơn: lãi trừ phí ship của đơn hoàn, tỷ lệ hoàn cần cả đơn hoàn.
+_STATUS_AWARE_METRICS = {"loi_nhuan_truoc_qc", "loi_nhuan_rong", "la_don_hoan"}
+
+
+def _repair_status_filter(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, Any]:
+    """Bỏ filter trang_thai khi plan tính lãi / tỷ lệ hoàn.
+
+    LLM hay thêm trang_thai = "Hoàn thành" cho câu hỏi lãi → mất chi phí hoàn, lãi bị tính CAO hơn thật
+    (TikTok 74,6 tr thay vì 59,8 tr, eval_seller #41/#43); với tỷ lệ hoàn thì ra 0%.
+    ponytail: câu hỏi cố ý "lãi của riêng đơn hoàn thành" cũng mất filter; tách khi có người hỏi vậy thật.
+    """
+    columns = {m.get("column") for m in plan.get("metrics") or [] if isinstance(m, dict)}
+    filters = plan.get("filters") or []
+    if "trang_thai" not in df.columns or not columns & _STATUS_AWARE_METRICS:
+        return plan
+    kept = [f for f in filters if not (isinstance(f, dict) and f.get("column") == "trang_thai")]
+    if len(kept) == len(filters):
+        return plan
+    _log.info("_repair_status_filter: dropped trang_thai filter for %s", sorted(columns & _STATUS_AWARE_METRICS))
+    return {**plan, "filters": kept}
 
 
 # Câu hỏi nhắm tới CẢ tập dữ liệu, không phải từng nhóm.

@@ -153,7 +153,8 @@ def _derived_values(result_df) -> dict[str, list[float]]:
 
 
 def _numbers_grounded(
-    answer: str, result_df, extra_allowed: list[float] | None = None, question: str = ""
+    answer: str, result_df, extra_allowed: list[float] | None = None, question: str = "",
+    notes: list[str] | None = None,
 ) -> bool:
     """
     Reject answers citing figures that the result set does not support — the most
@@ -164,7 +165,8 @@ def _numbers_grounded(
       - "45%" must match a ratio cell, a share of total or a change between values;
       - "lãi tăng X" needs a POSITIVE match, "lãi giảm/âm X", "lỗ X" a NEGATIVE one,
         and differences only count in table order (see _derived_values);
-      - numbers the user wrote in the question may be quoted back.
+      - numbers the user wrote in the question may be quoted back, and so may numbers in `notes` (the data
+        notes we put in the prompt: "3.735 đơn thiếu giá vốn" used to get every mode-C answer rejected).
     `extra_allowed` whitelists derived figures (e.g. distribution stats).
     """
     if result_df is None or result_df.empty:
@@ -176,7 +178,7 @@ def _numbers_grounded(
         (False, True): values, (False, False): values + d["backward"],
         (True, True): percents, (True, False): percents + d["backward_pct"],
     }
-    quoted = [abs(c.value) for c in _claims(question)]
+    quoted = [abs(c.value) for c in _claims("\n".join([question, *(notes or [])]))]
     for claim in _claims(answer):
         target = abs(claim.value)
         if not claim.percent and target < _GROUNDING_MIN:
@@ -282,6 +284,7 @@ def synthesize_node(state: AgentState) -> AgentState:
             if len(result_df) > cap:
                 rows_text += f"\n(… còn {len(result_df) - cap} dòng không hiển thị)"
         currency_note = _build_currency_warning(df, plan) or ""
+        prompt_notes = profit_notes(df, plan)
 
         prompt = (
             f"Bạn là trợ lý phân tích cho chủ shop bán hàng online. Dùng kết quả phân tích sau để trả lời câu hỏi.\n\n"
@@ -290,7 +293,7 @@ def synthesize_node(state: AgentState) -> AgentState:
             f"{rows_text}\n"
             f"{dist_context}"
             f"{'LƯU Ý: ' + currency_note if currency_note else ''}\n"
-            f"{_notes_for_prompt(profit_notes(df, plan))}\n"
+            f"{_notes_for_prompt(prompt_notes)}\n"
             "Yêu cầu:\n"
             "- Trả lời thẳng vào câu hỏi, không giải thích bạn đang làm gì\n"
             "- Nêu số liệu quan trọng nhất trước, sau đó điều đáng chú ý trong số liệu\n"
@@ -309,7 +312,8 @@ def synthesize_node(state: AgentState) -> AgentState:
             "- Nếu kết quả không đủ rõ ràng hoặc dữ liệu trống: hãy nói rõ 'Không tìm thấy dữ liệu phù hợp' thay vì đoán"
         )
         answer = _call_llm(client, prompt)
-        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df, extra_allowed=dist_allowed, question=question):
+        if _is_valid_synthesis(answer) and _numbers_grounded(answer, result_df, extra_allowed=dist_allowed,
+                                                             question=question, notes=prompt_notes):
             _log.info("synthesize_node: LLM synthesis OK (%d chars)", len(answer))
             if plan.get("action") == "profit_bridge":
                 # Gợi ý tính tất định, không để LLM tự nghĩ hay bỏ sót.
