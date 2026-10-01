@@ -59,7 +59,7 @@ def offline(monkeypatch):
     """Tắt LLM: plan rơi xuống rule-based, synthesize rơi xuống câu tất định."""
     from backend.app.agents.nodes import respond
 
-    def boom():
+    def boom(*_):
         raise RuntimeError("LLM disabled in test")
 
     monkeypatch.setattr("backend.app.services.llm_service.get_llm_client", boom)
@@ -189,3 +189,16 @@ def test_seller_endpoints(client):
     dash = client.get(f"/api/dashboard/{up['session_id']}").json()
     assert dash["platform"] == "Shopee + TikTok Shop"
     assert any(k["value"] == "Chưa có giá vốn" and k["is_alert"] for k in dash["kpi_cards"])
+
+
+def test_eval_seller_cases_pass_with_their_own_answer():
+    """Mỗi câu của eval_seller phải chấm ĐẠT được bằng chính đáp án: bắt đáp án NaN, số < 1000
+    hay rơi vào vùng năm 1900–2100 (bị numbers() bỏ), id trùng/nhảy cóc — không cần chạy server."""
+    from tests.eval_seller import REFUSAL, WARNING, cases, ground_truth, score
+    all_cases = cases(ground_truth())
+    assert [c.id for c in all_cases] == list(range(1, len(all_cases) + 1)) and len(all_cases) >= 150
+    for c in all_cases:
+        parts = [e[0] if isinstance(e, list) else e for e in c.expect]
+        text = " ".join(p if isinstance(p, str) else f"{p:,.0f} đ".replace(",", ".") for p in parts)
+        text += {"refuse": " " + REFUSAL[0], "warn": " " + WARNING[0]}.get(c.kind, "")
+        assert score(c, text) == (True, False), (c.id, text)
