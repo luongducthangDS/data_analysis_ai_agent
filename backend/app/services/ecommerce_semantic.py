@@ -485,6 +485,28 @@ def profit_notes(df: pd.DataFrame, plan: dict) -> list[str]:
     return notes
 
 
+def category_notes(df: pd.DataFrame, plan: dict) -> list[str]:
+    """Chia/lọc theo danh mục mà có SKU ngoài bảng sản phẩm → nói phần doanh thu nằm ở nhóm chưa có danh mục.
+
+    Nhóm đó có thể là "danh mục" lớn nhất: "danh mục nào lãi nhất" đúng về số mà vẫn gây hiểu sai.
+    """
+    dims = set(plan.get("group_by") or []) | {f.get("column") for f in plan.get("filters") or [] if isinstance(f, dict)}
+    if "danh_muc" not in dims or "danh_muc" not in df.columns or "doanh_thu_thuan" not in df.columns:
+        return []
+    unknown = df["danh_muc"] == NO_CATEGORY
+    total = df["doanh_thu_thuan"].sum()
+    if not unknown.any() or not total:
+        return []
+    share = df.loc[unknown, "doanh_thu_thuan"].sum() / total
+    return [f"{fmt_pct(share)} doanh thu thuần ({fmt_num(unknown.sum())} đơn) thuộc SKU không có trong bảng sản phẩm "
+            f"nên nằm ở nhóm \"{NO_CATEGORY}\"; so sánh giữa các danh mục chỉ đúng với phần còn lại."]
+
+
+def answer_notes(df: pd.DataFrame, plan: dict) -> list[str]:
+    """Mọi ghi chú tất định nối sau câu trả lời (và đưa vào prompt để LLM không nói ngược)."""
+    return profit_notes(df, plan) + category_notes(df, plan)
+
+
 def seller_notes(df: pd.DataFrame) -> list[str]:
     """Việc còn thiếu để có lãi thật, hiện ngay sau upload (trước khi seller kịp hỏi)."""
     if "doanh_thu_thuan" not in df.columns:

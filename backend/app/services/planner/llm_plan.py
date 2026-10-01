@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from backend.app.services.ecommerce_semantic import (
-    describe_metrics,
+    _strip_marks, describe_metrics,
 )
 from backend.app.services.security import sanitize_for_prompt
 from backend.app.services.planner.execute import _metric_label, _normalize
@@ -330,24 +330,29 @@ def _repair_ratio_denominator(plan: dict[str, Any], df: pd.DataFrame) -> dict[st
 
 
 # Metric đã tự xử lý trạng thái đơn: lãi trừ phí ship của đơn hoàn, tỷ lệ hoàn cần cả đơn hoàn.
-_STATUS_AWARE_METRICS = {"loi_nhuan_truoc_qc", "loi_nhuan_rong", "la_don_hoan"}
+_PROFIT_METRICS = {"loi_nhuan_truoc_qc", "loi_nhuan_rong"}
+# Người dùng tự nêu trạng thái ("lãi của đơn hoàn thành"). Không có "hoàn" trơn: "tỷ lệ hoàn" không phải lọc.
+_ASKED_STATUS = re.compile(
+    r"\b(?:hoan thanh|da giao|giao thanh cong|da huy|bi huy|huy|bi hoan|da hoan|tra hang|completed|cancel\w*|returned)\b")
 
 
-def _repair_status_filter(plan: dict[str, Any], df: pd.DataFrame) -> dict[str, Any]:
-    """Bỏ filter trang_thai khi plan tính lãi / tỷ lệ hoàn.
+def _repair_status_filter(plan: dict[str, Any], df: pd.DataFrame, question: str = "") -> dict[str, Any]:
+    """Bỏ filter trang_thai khi plan tính lãi / tỷ lệ hoàn, trừ khi chính câu hỏi nêu trạng thái.
 
     LLM hay thêm trang_thai = "Hoàn thành" cho câu hỏi lãi → mất chi phí hoàn, lãi bị tính CAO hơn thật
-    (TikTok 74,6 tr thay vì 59,8 tr, eval_seller #41/#43); với tỷ lệ hoàn thì ra 0%.
-    ponytail: câu hỏi cố ý "lãi của riêng đơn hoàn thành" cũng mất filter; tách khi có người hỏi vậy thật.
+    (TikTok 74,6 tr thay vì 59,8 tr, eval_seller #41/#43). Tỷ lệ hoàn thì lọc trạng thái luôn sai (ra 0%).
     """
     columns = {m.get("column") for m in plan.get("metrics") or [] if isinstance(m, dict)}
     filters = plan.get("filters") or []
-    if "trang_thai" not in df.columns or not columns & _STATUS_AWARE_METRICS:
+    if "trang_thai" not in df.columns or not columns & (_PROFIT_METRICS | {"la_don_hoan"}):
+        return plan
+    if "la_don_hoan" not in columns and _ASKED_STATUS.search(_strip_marks(question.lower())):
         return plan
     kept = [f for f in filters if not (isinstance(f, dict) and f.get("column") == "trang_thai")]
     if len(kept) == len(filters):
         return plan
-    _log.info("_repair_status_filter: dropped trang_thai filter for %s", sorted(columns & _STATUS_AWARE_METRICS))
+    _log.info("_repair_status_filter: dropped trang_thai filter for %s",
+              sorted(columns & (_PROFIT_METRICS | {"la_don_hoan"})))
     return {**plan, "filters": kept}
 
 

@@ -74,7 +74,7 @@ def plan_node(state: AgentState) -> AgentState:
         plan = _repair_column_names(plan, validate_df)
         plan = _repair_filter_values(plan, validate_df)
         plan = _repair_ratio_denominator(plan, validate_df)
-        plan = _repair_status_filter(plan, validate_df)
+        plan = _repair_status_filter(plan, validate_df, question)
         plan = _repair_who_plan(plan, question, validate_df)
         plan = _repair_id_to_name_group(plan, question, validate_df)
         plan = _repair_plan_for_question(plan, question)

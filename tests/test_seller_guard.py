@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from backend.app.agents.nodes.synthesize import _no_rows_answer, _numbers_grounded
+from backend.app.agents.nodes.synthesize import _claims, _no_rows_answer, _numbers_grounded
 from backend.app.services.planner.answer import _deterministic_answer
 from backend.app.services.planner.execute import execute_plan
 from backend.app.services.planner.fallback import build_fallback_plan
@@ -18,7 +18,8 @@ from backend.app.services.planner.llm_plan import (
     _repair_filter_values, _repair_ratio_denominator, _repair_status_filter,
 )
 from backend.app.services.ecommerce_semantic import (
-    NO_CATEGORY, asks_profit, cogs_gap, fmt_num, missing_category_notice, profit_notes,
+    NO_CATEGORY, answer_notes, asks_profit, category_notes, cogs_gap, fmt_num, fmt_pct, missing_category_notice,
+    profit_notes,
 )
 from backend.app.services.storage import SessionStore
 from scripts.gen_shop_lan import PARAMS
@@ -194,6 +195,43 @@ def test_profit_ignores_completed_only_filter(full):
     assert got == pytest.approx(df.loc[df["kenh"] == "TikTok Shop", "loi_nhuan_rong"].sum())
     count = {"action": "aggregate", "filters": [done], "metrics": [{"column": "ma_don", "aggregation": "count"}]}
     assert _repair_status_filter(count, df) == count  # "bao nhiêu đơn hoàn thành" vẫn cần filter
+
+
+@pytest.mark.parametrize("question, keeps", [
+    ("Lãi của các đơn hoàn thành tháng 6", True), ("lỗ từ đơn bị huỷ", True), ("lai don da giao", True),
+    ("lai tiktok thang 6", False), ("Lãi tháng 5 giảm vì hoàn hàng?", False),
+])
+def test_status_filter_kept_only_when_the_question_names_a_status(full, question, keeps):
+    done = {"column": "trang_thai", "operator": "eq", "value": "Hoàn thành"}
+    plan = {"action": "aggregate", "filters": [done], "metrics": [{"column": "loi_nhuan_truoc_qc"}]}
+    assert (done in _repair_status_filter(plan, full.dataframe, question)["filters"]) is keeps
+    # Tỷ lệ hoàn trên riêng đơn hoàn thành luôn là 0%: bỏ filter kể cả khi câu hỏi nêu trạng thái.
+    rate = {"action": "aggregate", "filters": [done], "metrics": [{"column": "la_don_hoan", "aggregation": "mean"}]}
+    assert _repair_status_filter(rate, full.dataframe, question)["filters"] == []
+
+
+def test_category_answer_states_the_unknown_share(full, partial):
+    df = partial.dataframe
+    by_category = {"action": "aggregate", "group_by": ["danh_muc"], "metrics": [{"column": "doanh_thu_thuan"}]}
+    unknown = df["danh_muc"] == NO_CATEGORY
+    share = df.loc[unknown, "doanh_thu_thuan"].sum() / df["doanh_thu_thuan"].sum()
+    [note] = category_notes(df, by_category)
+    assert fmt_pct(share) in note and fmt_num(unknown.sum()) in note
+    assert category_notes(df, {"group_by": ["kenh"]}) == []
+    assert category_notes(full.dataframe, by_category) == []  # đủ danh mục thì không cảnh báo
+
+
+def test_note_numbers_all_come_from_the_data(partial):
+    # Trích số từ ghi chú chỉ an toàn khi ghi chú không chứa số nào ngoài số tính từ dữ liệu của request.
+    df = partial.dataframe
+    plan = {"group_by": ["danh_muc"], "metrics": [{"column": "loi_nhuan_truoc_qc"}]}
+    gap, unknown = cogs_gap(df), df["danh_muc"] == NO_CATEGORY
+    data = {float(gap["orders"]), round(gap["revenue_share"] * 100, 1), float(unknown.sum()),
+            round(df.loc[unknown, "doanh_thu_thuan"].sum() / df["doanh_thu_thuan"].sum() * 100, 1)}
+    notes = answer_notes(df, plan)
+    assert len(notes) == 3  # thiếu giá vốn, trước quảng cáo, chưa có danh mục
+    checked = [c for c in _claims("\n".join(notes)) if c.percent or abs(c.value) >= 1000]
+    assert checked and all(round(abs(c.value), 1) in data for c in checked)
 
 
 def test_numbers_from_data_notes_may_be_quoted_but_not_invented(partial):

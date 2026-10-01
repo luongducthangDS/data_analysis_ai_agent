@@ -210,7 +210,7 @@ def synthesize_node(state: AgentState) -> AgentState:
     from backend.app.services.storage import session_store
     from backend.app.services.planner.execute import _describe_numeric
     from backend.app.services.planner.answer import _deterministic_answer, _build_charts_from_result, _build_currency_warning
-    from backend.app.services.ecommerce_semantic import profit_notes, seller_questions
+    from backend.app.services.ecommerce_semantic import answer_notes, seller_questions
 
     question = state["question"]
     plan = state.get("plan") or {}
@@ -221,7 +221,7 @@ def synthesize_node(state: AgentState) -> AgentState:
     def _with_warning(ans: str) -> str:
         ans = f"⚠️ {join_warning}\n\n{ans}" if join_warning else ans
         # Ghi chú bắt buộc về lãi (thiếu giá vốn, trước/sau quảng cáo) — tất định, không nhờ LLM nhớ.
-        notes = profit_notes(df, plan) if result_df is not None and not result_df.empty else []
+        notes = answer_notes(df, plan) if result_df is not None and not result_df.empty else []
         return ans + "".join(f"\n\n⚠️ {n}" for n in notes)
 
     try:
@@ -284,7 +284,7 @@ def synthesize_node(state: AgentState) -> AgentState:
             if len(result_df) > cap:
                 rows_text += f"\n(… còn {len(result_df) - cap} dòng không hiển thị)"
         currency_note = _build_currency_warning(df, plan) or ""
-        prompt_notes = profit_notes(df, plan)
+        prompt_notes = answer_notes(df, plan)
 
         prompt = (
             f"Bạn là trợ lý phân tích cho chủ shop bán hàng online. Dùng kết quả phân tích sau để trả lời câu hỏi.\n\n"
