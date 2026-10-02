@@ -333,6 +333,14 @@ def test_eval_seller_cases_pass_with_their_own_answer():
         assert score(c, text) == (True, False), (c.id, text)
 
 
+def test_eval_pct_does_not_match_inside_a_bigger_number():
+    # Đường luật từng in tỷ trọng tháng "(14,0%)" cạnh lãi; "4,0" (biên lãi ròng T6) khớp chuỗi con → chấm đạt oan.
+    from tests.eval_seller import cases, ground_truth, score
+    margin = {c.id: c for c in cases(ground_truth())}[47]  # "Biên lợi nhuận tháng 6 là bao nhiêu %?"
+    assert score(margin, "6. 2026-06: 48.832.115 (14,0%)")[0] is False
+    assert score(margin, "Biên lợi nhuận tháng 6 là 11,6%.")[0] is True
+
+
 def test_suggested_questions_are_right_without_llm(full, offline):
     """Câu gợi ý trong app phải đúng cả khi LLM không gọi được (hết quota → plan luật + câu tất định).
 

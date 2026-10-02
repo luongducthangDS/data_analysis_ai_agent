@@ -405,6 +405,13 @@ def numbers(text: str) -> list[float]:
     return [v for v in out if v >= 1000 and not (v.is_integer() and 1900 <= v <= 2100)]
 
 
+def _has(text: str, low: str) -> bool:
+    """`text` có trong câu trả lời. Chuỗi bắt đầu bằng chữ số phải khớp từ ĐẦU một số: "4,0" từng khớp
+    trong "(14,0%)" và chấm đạt câu biên lãi mà app không hề tính. Phía sau thì cho dài hơn ("34,5" khớp "34,52%")."""
+    x = text.lower()
+    return re.search(("(?<![\\d.,])" if x[:1].isdigit() else "") + re.escape(x), low) is not None
+
+
 def score(case: Case, answer: str) -> tuple[bool, bool]:
     """(đạt, số_sai_trông_như_đúng)."""
     low = answer.lower()
@@ -417,14 +424,14 @@ def score(case: Case, answer: str) -> tuple[bool, bool]:
         # Cảnh báo là bắt buộc, nhưng số đi kèm vẫn phải đúng theo dữ liệu đang có.
         strings = [e for e in case.expect if isinstance(e, str)]
         values = [e for e in case.expect if not isinstance(e, str)]
-        right = (all(x.lower() in low for x in strings)
+        right = (all(_has(x, low) for x in strings)
                  and (not values or any(abs(n - abs(e)) <= TOL * abs(e) for n in nums for e in values)))
         ok = any(w in low for w in WARNING) and right
         return ok, (not right) and bool(nums)
     if case.kind == "no_numbers":
         return not nums, bool(nums)
     if case.kind == "contains":
-        ok = all(any(x.lower() in low for x in (e if isinstance(e, list) else [e])) for e in case.expect)
+        ok = all(any(_has(x, low) for x in (e if isinstance(e, list) else [e])) for e in case.expect)
         return ok, False
     hit = any(abs(n - abs(e)) <= TOL * abs(e) for n in nums for e in case.expect)
     near = any(abs(n - abs(e)) <= TOL * abs(e) for n in nums for e in case.near)
