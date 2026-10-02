@@ -321,8 +321,8 @@ def _make_request_key_anthropic(key: str) -> Callable[[], object]:
 def _gemini_keys() -> list[str]:
     """Các Gemini key khả dụng, theo thứ tự ưu tiên, đã khử trùng lặp.
 
-    Quota free tier tính riêng cho từng cặp (key, model) — 15 request/phút mỗi
-    model mỗi key. Khai thêm GEMINI_API_KEY2 là nhân đôi hạn mức đó.
+    Quota free tier tính theo (PROJECT Google Cloud, model), không theo key: 429 ghi
+    `PerDayPerProjectPerModel`. GEMINI_API_KEY2 chỉ nhân đôi hạn mức khi tạo ở project khác.
     """
     keys: list[str] = []
     for var in ("GEMINI_API_KEY", "GEMINI_API_KEY2", "GEMINI_API_KEY3", "GOOGLE_API_KEY"):

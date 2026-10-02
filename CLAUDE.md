@@ -68,7 +68,8 @@
   và `test_eval_seller_cases_pass_with_their_own_answer` phải qua (bắt số rơi vào vùng năm 1900–2100, NaN);
   Gemini free tier: chạy với `--delay 8`, câu `source=fallback` do quota thì chạy lại rồi `--merge` (merge chấm lại từ câu đã lưu);
   `--delay` chỉ chống quota THEO PHÚT: 1 lượt dev + held-out ≈ 400 lượt gọi, 3 lượt/ngày là cạn quota NGÀY (cả production
-  nếu chung key) → dùng key riêng cho eval; bộ held-out (`--heldout`) không được dùng để sửa app;
+  nếu chung key — đã xảy ra 01/10) → eval dùng key ở PROJECT Google Cloud riêng (quota tính theo project, key mới
+  cùng project vẫn chung quota), `.env` local không chứa key production; bộ held-out (`--heldout`) không được dùng để sửa app;
   `wrong_looks_right` phải = 0 trước khi release. Phần tất định chạy offline ở `tests/test_seller_guard.py`.
 - Thiếu đầu vào của metric → KHÔNG tạo cột đó (không fill 0, không để LLM thay cột khác); câu hỏi cần nó trả lời
   từ chối tất định (`missing_cogs_notice`). Cảnh báo dữ liệu nối vào câu trả lời ở `profit_notes`, không nhờ LLM nhớ.
