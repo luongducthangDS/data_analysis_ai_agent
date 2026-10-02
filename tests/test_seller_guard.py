@@ -350,6 +350,16 @@ def test_eval_pct_does_not_match_inside_a_bigger_number():
     assert score(margin, "Biên lợi nhuận tháng 6 là 11,6%.")[0] is True
 
 
+def test_eval_single_period_question_rejects_a_table_of_every_period():
+    # "Lãi tháng 5?" trả bảng 6 tháng: số tháng 5 có trong bảng nhưng câu hỏi chưa được trả lời.
+    from tests.eval_seller import cases, ground_truth, score
+    case = {c.id: c for c in cases(ground_truth())}[2]  # "Lãi tháng 5 là bao nhiêu?"
+    may = f"{case.expect[0]:,.0f}".replace(",", ".")
+    table = "\n".join(f"{i}. 2026-0{i}: {may if i == 5 else '1.000.000'}" for i in range(1, 7))
+    assert score(case, table) == (False, False)
+    assert score(case, f"Lãi tháng 5 là {may} đ, thấp hơn tháng 4.") == (True, False)
+
+
 def test_suggested_questions_are_right_without_llm(full, offline):
     """Câu gợi ý trong app phải đúng cả khi LLM không gọi được (hết quota → plan luật + câu tất định).
 

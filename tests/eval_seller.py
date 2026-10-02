@@ -32,6 +32,7 @@ import json
 import re
 import sys
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -491,8 +492,54 @@ def _has(text: str, low: str) -> bool:
     return re.search(("(?<![\\d.,])" if x[:1].isdigit() else "") + re.escape(x), low) is not None
 
 
+_NOT_LOOKUP = re.compile(r"\b(?:theo|tung|moi|nao|so voi|den|vi sao|tai sao|tang|giam)\b")
+# Nhãn kỳ dạng bảng ("2026-04", "2026Q2"; bỏ ngày đủ "2026-01-01" trong mô tả bộ lọc) và dạng câu ("tháng 4").
+_TABLE_PERIOD = re.compile(r"\b20\d\d-(0[1-9]|1[0-2])\b(?!-\d)|\b20\d\dq([1-4])\b")
+_TEXT_PERIOD = re.compile(r"\btháng 0?(1[0-2]|[1-9])\b|\bt(1[0-2]|[1-9])/20\d\d\b")
+
+
+def _plain(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text.lower().replace("đ", "d"))
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+
+def _asked_period(question: str) -> set[str] | None:
+    """Kỳ mà câu hỏi nhắm tới: {"5"} cho tháng 5, {"q2", "4", "5", "6"} cho quý 2; None nếu không hỏi một kỳ."""
+    q = _plain(question)
+    if _NOT_LOOKUP.search(q):
+        return None
+    if m := re.search(r"\bquy ([1-4])\b", q):
+        k = int(m.group(1))
+        return {f"q{k}"} | {str(x) for x in range(3 * k - 2, 3 * k + 1)}
+    if m := re.search(r"\bthang (\d{1,2})\b", q):
+        return {str(int(m.group(1)))}
+    if m := re.search(r"\bthang (nay|truoc)\b", q):
+        return {"6" if m.group(1) == "nay" else "5"}  # dữ liệu mô phỏng hết 30/06/2026
+    return None
+
+
+def _dumps_periods(question: str, answer: str) -> bool:
+    """Hỏi MỘT kỳ ("lãi tháng 5") mà trả bảng mọi kỳ: số đúng nằm đâu đó trong bảng nhưng chưa trả lời câu hỏi
+    (đường luật từng "đạt" 35 câu dev kiểu này). Kể tháng trong quý được hỏi, so với 1 kỳ khác thì vẫn được."""
+    asked = _asked_period(question)
+    if asked is None:
+        return False
+    low = answer.lower()
+    table = {m[0].lstrip("0") or f"q{m[1]}" for m in _TABLE_PERIOD.findall(low)} - asked
+    text = {a or b for a, b in _TEXT_PERIOD.findall(low)} - asked
+    return bool(table) or len(text) >= 2
+
+
 def score(case: Case, answer: str) -> tuple[bool, bool]:
-    """(đạt, số_sai_trông_như_đúng)."""
+    """(đạt, số_sai_trông_như_đúng). Bảng mọi kỳ cho câu hỏi một kỳ chỉ hạ "đạt" xuống "trượt";
+    bảng mang số sai vẫn là 🚨 (hạ trước khi chấm từng giấu 8 câu 🚨 của đường luật)."""
+    ok, wrong = _score(case, answer)
+    if ok and case.kind in ("number", "contains", "warn") and _dumps_periods(case.question, answer):
+        return False, False
+    return ok, wrong
+
+
+def _score(case: Case, answer: str) -> tuple[bool, bool]:
     low = answer.lower()
     nums = numbers(answer)
     warned = any(w in low for w in WARNING + REFUSAL)
