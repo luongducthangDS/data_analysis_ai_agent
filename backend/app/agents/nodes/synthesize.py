@@ -205,7 +205,6 @@ def synthesize_node(state: AgentState) -> AgentState:
     Falls back to _deterministic_answer if LLM fails.
     Also builds charts.
     """
-    from backend.app.core.config import get_settings
     from backend.app.services.llm_service import get_llm_client
     from backend.app.services.storage import session_store
     from backend.app.services.planner.execute import _describe_numeric
@@ -271,7 +270,7 @@ def synthesize_node(state: AgentState) -> AgentState:
 
     # Try LLM synthesis
     try:
-        client = get_llm_client(get_settings().llm_provider_synthesize)
+        client = get_llm_client()
         col_names = list(df.columns)[:15]
         if plan.get("action") == "profit_bridge":
             # Cột trộn tỷ lệ (0.335) với tiền (4e8) → pandas in dạng 4.219710e+08, LLM dễ đọc sai.

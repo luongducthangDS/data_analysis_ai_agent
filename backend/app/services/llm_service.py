@@ -378,12 +378,11 @@ def _env_provider_specs(forced: str) -> list[_ProviderSpec]:
 _clients: dict[str, FailoverLLMClient] = {}  # theo provider đã ghim ("" = auto)
 
 
-def get_llm_client(provider: str = "") -> FailoverLLMClient:
+def get_llm_client() -> FailoverLLMClient:
     """
     Return a FailoverLLMClient.
     Priority: user-supplied header keys (per request) → env-var provider chain.
     Set LLM_PROVIDER env var (or X-LLM-Provider header) to pin one provider.
-    `provider` ghim provider cho riêng lần gọi này (vd bước synthesize dùng model khác bước plan).
     """
     rk = _request_keys.get()
 
@@ -400,7 +399,7 @@ def get_llm_client(provider: str = "") -> FailoverLLMClient:
         if specs:
             return FailoverLLMClient(specs)
 
-    forced = (provider or os.getenv("LLM_PROVIDER", "")).lower()
+    forced = os.getenv("LLM_PROVIDER", "").lower()
     if forced in _clients:
         return _clients[forced]
     specs = _env_provider_specs(forced)
