@@ -330,7 +330,7 @@ việc các lỗ hổng đã phát hiện không tái phát.
 
 | # | Lỗ hổng | Mức | Bằng chứng trước khi vá |
 |---|---|---|---|
-| 1 | **SSRF** — `fetch_from_url` nhận URL người dùng dán, không lọc scheme, không chặn IP nội bộ, đi theo redirect vô điều kiện, không giới hạn kích thước tải | Cao | PoC kéo được nội dung từ dịch vụ chạy trên `127.0.0.1`. Repo deploy lên Railway/Render → `169.254.169.254` làm lộ credentials |
+| 1 | **SSRF** — `fetch_from_url` nhận URL người dùng dán, không lọc scheme, không chặn IP nội bộ, đi theo redirect vô điều kiện, không giới hạn kích thước tải | Cao | PoC kéo được nội dung từ dịch vụ chạy trên `127.0.0.1`. Repo deploy lên Render → `169.254.169.254` làm lộ credentials |
 | 2 | **ReDoS** — filter `contains` gọi `str.contains` để mặc định `regex=True`, giá trị filter do LLM sinh (chịu ảnh hưởng câu hỏi người dùng) | Trung bình–Cao | Pattern `(a+)+$`: thời gian ×4 mỗi 2 ký tự thêm vào (len=22 → 0.64s/dòng). 50 dòng treo >120s |
 | 3 | **Indirect prompt injection** — tên cột và 5 giá trị mẫu mỗi cột nhúng thẳng vào prompt planner, không sanitize | Trung bình | Tác hại bị giới hạn bởi thiết kế plan-grammar: injection thành công cũng chỉ sinh được plan JSON hợp lệ, không dẫn tới thực thi code |
 | 4 | **limit không có trần** | Thấp | `limit: 10**9` qua được validate, phình payload và token khi synthesize |

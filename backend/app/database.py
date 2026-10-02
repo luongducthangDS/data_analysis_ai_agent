@@ -11,7 +11,7 @@ from backend.app.core.config import get_settings
 
 DATABASE_URL = get_settings().database_url
 
-# Normalize legacy postgres:// (Railway, Supabase) → postgresql://
+# Normalize legacy postgres:// (vd Supabase) → postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 

@@ -19,15 +19,10 @@
 
 ### Khi edit config deploy, phải trace flow thực thi end-to-end trước khi confirm xong
 - Không chỉ check từng file riêng lẻ — phải đọc lại toàn bộ file đã edit và simulate
-  "Railway/Docker sẽ thực thi cái gì, theo thứ tự nào"
-
-### railway.toml: startCommand ghi đè Dockerfile CMD
-- Nếu dùng `builder = "dockerfile"`, Railway vẫn chạy `startCommand` nếu có —
-  `startCommand` không expand shell variable (`$PORT` → lỗi, phải dùng `sh -c`)
-- Khi chuyển builder, phải kiểm tra xem `startCommand` có conflict không
+  "Render/Docker sẽ thực thi cái gì, theo thứ tự nào"
 
 ### Git Bash đổi đối số `/path` thành đường dẫn Windows
-- Gọi CLI (render, railway…) với đối số `/api/...` từ Git Bash → thêm `MSYS_NO_PATHCONV=1`, rồi đọc lại giá trị đã lưu
+- Gọi CLI (render…) với đối số `/api/...` từ Git Bash → thêm `MSYS_NO_PATHCONV=1`, rồi đọc lại giá trị đã lưu
 
 ### Route mới: session qua `load_owned_session`/`get_session`, gọi LLM thì gắn `@limiter.limit(RATE_LIMIT)`
 - Không gọi `session_store.get(id)` trần trong route (bỏ qua kiểm tra chủ). Code chặn (pandas, DB) → route `def`, không `async def`.

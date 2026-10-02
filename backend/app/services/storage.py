@@ -23,7 +23,7 @@ from backend.app.core.config import get_settings
 from backend.app.database import db_session, ChatHistoryModel, ReportModel, SessionFileModel, SessionModel
 
 
-# DATA_DIR lets Railway mount a persistent volume at a custom path.
+# DATA_DIR lets the host mount a persistent volume at a custom path.
 # Falls back to "data/" (relative to CWD = /app) for local dev. Disk is only a
 # cache: uploads, history and reports are also stored in DATABASE_URL, so an
 # ephemeral disk (Render free) can be rebuilt from Postgres/Supabase.
