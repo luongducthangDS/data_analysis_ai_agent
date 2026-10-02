@@ -53,5 +53,5 @@ services:
         value: "150"
 
 # Keep-alive (free tier sleeps after 15 min idle): point a free cron
-# (cron-job.org / UptimeRobot) at GET https://<app>.onrender.com/api/health
+# (cron-job.org / UptimeRobot) at GET https://data-analysis-ai-agent-tb47.onrender.com/api/health
 # every 10 min. 1 service × 24/7 ≈ 744 h ≤ 750 free instance-hours/month.

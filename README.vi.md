@@ -122,7 +122,7 @@ flowchart LR
 **Backend** FastAPI · LangGraph · pandas · Plotly · SQLAlchemy · slowapi
 **Frontend** React 18 · Vite · react‑plotly.js
 **LLM** Google Gemini (chính) · OpenRouter (dự phòng, nhiều model) · tùy chọn Anthropic
-**Hạ tầng** Docker (multi‑stage) · Railway / Render config · LangSmith tracing (tùy chọn)
+**Hạ tầng** Docker (multi‑stage) · Render config · LangSmith tracing (tùy chọn)
 
 ## Kiểm thử
 
