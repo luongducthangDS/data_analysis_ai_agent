@@ -5,6 +5,7 @@ LLM bị tắt: mọi câu trả lời đi đường tất định, nên chạy 
 """
 import io
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -19,7 +20,7 @@ from backend.app.services.planner.llm_plan import (
 )
 from backend.app.services.ecommerce_semantic import (
     NO_CATEGORY, answer_notes, asks_profit, category_notes, cogs_gap, fmt_num, fmt_pct, missing_category_notice,
-    profit_notes,
+    profit_notes, seller_questions,
 )
 from backend.app.services.storage import SessionStore
 from scripts.gen_shop_lan import PARAMS
@@ -330,3 +331,52 @@ def test_eval_seller_cases_pass_with_their_own_answer():
         text = " ".join(p if isinstance(p, str) else f"{p:,.0f} đ".replace(",", ".") for p in parts)
         text += {"refuse": " " + REFUSAL[0], "warn": " " + WARNING[0]}.get(c.kind, "")
         assert score(c, text) == (True, False), (c.id, text)
+
+
+def test_suggested_questions_are_right_without_llm(full, offline):
+    """Câu gợi ý trong app phải đúng cả khi LLM không gọi được (hết quota → plan luật + câu tất định).
+
+    Đường luật từng sai 3/6: "doanh thu cao mà đang lỗ" ra top SKU LÃI, tỷ lệ phí sàn "chưa hiểu",
+    tỷ lệ hoàn theo tỉnh × ĐVVC ra max cờ 0/1 = "1 (10,0%)" cho mọi tỉnh."""
+    from tests.eval_seller import ground_truth
+    t = ground_truth()
+    mo, ch, sku = t["by"]("thang"), t["by"]("kenh"), t["by"]("sku")
+    seg = t["by"]("tinh", "don_vi_van_chuyen").sort_values("hoan", ascending=False)
+    (tinh, dvvc), top = seg.index[0], seg.iloc[0]
+    loss = set(sku.index[sku.pre < 0])
+    expect = {
+        "Vì sao lãi tháng này giảm?": [fmt_num(mo.pre[5] - mo.pre[6])],
+        "Lãi từng tháng thế nào?": [fmt_num(v) for v in mo.pre],
+        "SKU nào doanh thu cao mà đang lỗ?": sorted(loss),
+        "Lãi ròng sau quảng cáo theo tháng": [fmt_num(v) for v in mo.net],
+        "Tỷ lệ phí sàn Shopee và TikTok bên nào cao hơn?": [fmt_pct(r) for r in ch.fee / ch.rev],
+        "Tỉnh và đơn vị vận chuyển nào có tỷ lệ hoàn cao nhất?": [f"{tinh} | {dvvc} | {fmt_pct(top.hoan)}"],
+    }
+    assert set(expect) == set(seller_questions(full.dataframe))
+    answers = {q: _ask(full, q).answer for q in expect}
+    for question, parts in expect.items():
+        assert all(p in answers[question] for p in parts), (question, answers[question])
+    assert set(re.findall(r"LAN-\d+", answers["SKU nào doanh thu cao mà đang lỗ?"])) == loss
+    # Tỷ trọng tháng/tổng in cạnh lãi ("34.002.675 (20,5%)") đọc như biên lãi.
+    assert "%" not in answers["Lãi từng tháng thế nào?"] + answers["Lãi ròng sau quảng cáo theo tháng"]
+
+
+@pytest.mark.parametrize("question", [
+    "Tỷ lệ hoàn theo đơn vị vận chuyển ở Hà Nội",  # nhắc 1 tỉnh mà không chia theo tỉnh
+    "SKU nào đang lỗ ở Nghệ An",
+    "Tỷ lệ phí sàn từng kênh tháng 5",
+    "Tỷ lệ hoàn bao nhiêu",                       # không có chiều để chia: để luật chung xử lý
+])
+def test_seller_rule_plan_skips_questions_it_cannot_filter(full, question):
+    from backend.app.services.planner.execute import _normalize
+    from backend.app.services.planner.fallback import _seller_plan
+    assert _seller_plan(full.dataframe, _normalize(question)) is None
+
+
+def test_having_must_reference_plan_metrics(full):
+    from backend.app.services.planner.execute import _validate_plan_against_dataframe
+    with pytest.raises(ValueError):
+        _validate_plan_against_dataframe(full.dataframe, {
+            "action": "aggregate", "group_by": ["sku"],
+            "metrics": [{"column": "loi_nhuan_truoc_qc", "aggregation": "sum", "label": "Lãi"}],
+            "having": [{"column": "loi_nhuan_truoc_qc", "operator": "lt", "value": 0}]})

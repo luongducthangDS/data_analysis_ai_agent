@@ -346,7 +346,7 @@ def _no_rows_answer(df, plan: dict) -> str:
     import pandas as pd
 
     lines = ["Không có dòng nào khớp điều kiện của câu hỏi."]
-    for f in plan.get("filters") or []:
+    for f in (plan.get("filters") or []) + (plan.get("having") or []):
         col, value = f.get("column"), f.get("value")
         lines.append(f"- Điều kiện: {col} {f.get('operator')} {value}")
         if col not in df.columns:

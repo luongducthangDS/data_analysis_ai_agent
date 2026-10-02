@@ -56,6 +56,8 @@
   số backend đưa vào prompt (ghi chú dữ liệu) phải nằm trong tập số được phép của `_numbers_grounded(notes=...)`.
 - "Vì sao lãi đổi" = action `profit_bridge` (`ecommerce_semantic.profit_bridge`): 4 hạng mục cộng lại PHẢI bằng Δ lãi
   (giá vốn lấy phần dư). Gợi ý hành động sinh tất định ở `bridge_actions`, LLM không tự nghĩ; test bám đáp án S1/S4.
+- Câu gợi ý (`seller_questions`) phải đúng cả khi KHÔNG có LLM: sửa/thêm câu → cập nhật `test_suggested_questions_are_right_without_llm`.
+  Quy tắc metric mới viết vào prompt LLM thì thêm luôn vào `_seller_plan` (`planner/fallback.py`), không thì đường Luật làm sai.
 - Thêm action mới cho planner: sửa CẢ `ALLOWED_ACTIONS` (`services/planner/execute.py`) lẫn `_ALLOWED_ACTIONS` + `_ACTION_ALIASES` (`agents/nodes/plan.py`).
 - Mọi merge trên dữ liệu người dùng phải gọi `check_join_size` (`services/storage.py`) trước; lỗi guard (`JoinTooLarge`) không được bị `except Exception` nuốt.
 - So khớp từ khoá trên câu hỏi đã bỏ dấu phải khớp NGUYÊN TỪ (`\b`): chuỗi con "ai " từng khớp nhầm "lãi"/"loại"/"cái".

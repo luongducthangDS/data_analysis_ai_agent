@@ -140,6 +140,10 @@ def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> 
         for key in ("numerator", "denominator"):
             if ratio.get(key) not in labels:
                 raise PlanValidationError(f"ratio.{key} phải là label của một metric trong plan: {ratio.get(key)}")
+    labels |= {r.get("label") for r in plan.get("ratios") or []}
+    for item in plan.get("having") or []:
+        if item.get("column") not in labels or item.get("operator") not in ALLOWED_FILTER_OPERATORS:
+            raise PlanValidationError(f"having phải lọc trên label của metric/ratio: {item}")
 
 
 def _validate_derived_sources(known: set[str], derived: dict[str, Any]) -> None:
@@ -295,6 +299,8 @@ def _execute_aggregate(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
         # Tỷ số của 2 TỔNG (vd phí sàn / doanh thu thuần), không phải trung bình tỷ lệ từng đơn.
         den = pd.to_numeric(result[ratio["denominator"]], errors="coerce")
         result[ratio["label"]] = (pd.to_numeric(result[ratio["numerator"]], errors="coerce") / den.where(den != 0)).round(4)
+    # Lọc SAU khi cộng ("SKU nào đang lỗ" = tổng lãi < 0): filter thường chạy trên từng đơn, bỏ mất đơn lãi.
+    result = _apply_filters(result, plan.get("having") or [])
     return _sort_and_limit(result, plan)
 
 

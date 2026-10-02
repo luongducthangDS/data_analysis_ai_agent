@@ -8,7 +8,7 @@ import pandas as pd
 
 from backend.app.services.analysis_intent import infer_grouped_metric_intent
 from backend.app.services.ecommerce_semantic import (
-    BRIDGE_REQUIRED, month_periods, pick_metric,
+    BRIDGE_REQUIRED, PROFIT_COLS, month_periods, pick_metric,
 )
 from backend.app.services.planner.execute import _normalize
 
@@ -17,9 +17,9 @@ def build_fallback_plan(df: pd.DataFrame, question: str) -> dict[str, Any]:
     """Rule-based fallback when LLM planning fails. Covers common DA/accounting patterns."""
     normalized = _normalize(question)
 
-    bridge = _profit_bridge_fallback(df, normalized)
-    if bridge:
-        return bridge
+    seller = _profit_bridge_fallback(df, normalized) or _seller_plan(df, normalized)
+    if seller:
+        return seller
 
     # Insight / overview / profile questions → use profile action immediately
     _INSIGHT_KEYWORDS = (
@@ -203,6 +203,57 @@ def _profit_bridge_fallback(df: pd.DataFrame, normalized: str) -> dict[str, Any]
     return plan
 
 
+# Chiều của bảng đơn TMĐT: từ khoá (đã bỏ dấu) → cột. "tinh" trùng "tính" nên cần từ đi kèm.
+_SELLER_DIMS = (
+    (r"\bsku\b|\bma hang\b", "sku"),
+    (r"\bsan pham\b|\bmat hang\b", "ten_san_pham"),
+    (r"\bdanh muc\b|\bnganh hang\b", "danh_muc"),
+    (r"\bkenh\b|\bsan nao\b|\bshopee\b|\btiktok\b", "kenh"),
+    (r"\btinh (?:nao|thanh|va)\b|\b(?:theo|cac|moi|tung) tinh\b", "tinh"),
+    (r"\bvan chuyen\b|\bdvvc\b", "don_vi_van_chuyen"),
+)
+_TIME_WORD = re.compile(r"\b(?:thang|quy|tuan|ngay|nam)\b")
+
+
+def _seller_plan(df: pd.DataFrame, normalized: str) -> dict[str, Any] | None:
+    """Câu seller mà luật chung làm sai, theo đúng quy tắc semantic trong prompt LLM: tỷ lệ hoàn = mean cờ 0/1
+    (không max/sum), tỷ lệ phí sàn = tỷ số 2 tổng, "X nào đang lỗ" = nhóm có TỔNG lãi < 0.
+
+    Chỉ trả lời khi câu hỏi nêu chiều để chia và không kèm điều kiện lọc: có kỳ thời gian hay nhắc một giá trị
+    (tỉnh, SKU, danh mục...) mà không chia theo nó thì trả None — trả lời cả shop cho câu hỏi về một tỉnh là
+    số sai trông như đúng.
+    """
+    if "doanh_thu_thuan" not in df.columns or _TIME_WORD.search(normalized):
+        return None
+    dims = [col for pattern, col in _SELLER_DIMS if col in df.columns and re.search(pattern, normalized)]
+    # ponytail: so khớp nguyên giá trị ("J&T Express"), viết tắt ("J&T") lọt qua; cần thì thêm alias.
+    if not dims or any(
+        re.search(rf"\b{re.escape(_normalize(v))}\b", normalized)
+        for _, col in _SELLER_DIMS if col in df.columns and col not in dims for v in df[col].dropna().unique()
+    ):
+        return None
+    metric = pick_metric(normalized, df)
+    asc = any(kw in normalized for kw in ("nho nhat", "thap nhat", "it nhat"))
+    revenue = {"column": "doanh_thu_thuan", "aggregation": "sum", "label": "Doanh thu thuần"}
+    plan: dict[str, Any] = {"action": "aggregate", "group_by": dims, "limit": _extract_top_n(normalized) or 10}
+    if re.search(r"\bty le phi\b", normalized) and "phi_san" in df.columns:
+        return {**plan, "metrics": [{"column": "phi_san", "aggregation": "sum", "label": "Phí sàn"}, revenue],
+                "ratios": [{"label": "Tỷ lệ phí sàn", "numerator": "Phí sàn", "denominator": "Doanh thu thuần"}],
+                "sort": [{"column": "Tỷ lệ phí sàn", "direction": "asc" if asc else "desc"}]}
+    if metric == "la_don_hoan":
+        metrics = [{"column": "la_don_hoan", "aggregation": "mean", "label": "Tỷ lệ hoàn"}]
+        if "ma_don" in df.columns:  # cỡ nhóm: 20% của 44 đơn khác 20% của 400 đơn
+            metrics.append({"column": "ma_don", "aggregation": "count", "label": "Số đơn"})
+        return {**plan, "metrics": metrics, "sort": [{"column": "Tỷ lệ hoàn", "direction": "asc" if asc else "desc"}]}
+    if metric in PROFIT_COLS and re.search(r"\blo\b", normalized):
+        label = "Lãi ròng" if metric == "loi_nhuan_rong" else "Lãi trước QC"
+        sort = ({"column": "Doanh thu thuần", "direction": "desc"} if "doanh thu" in normalized
+                else {"column": label, "direction": "asc"})
+        return {**plan, "metrics": [revenue, {"column": metric, "aggregation": "sum", "label": label}],
+                "having": [{"column": label, "operator": "lt", "value": 0}], "sort": [sort]}
+    return None
+
+
 def _detect_numeric_threshold(normalized: str) -> tuple[str, float] | None:
     """
     Parse queries like "điểm dưới 5", "score >= 8", "salary trên 10 triệu".
@@ -245,7 +296,9 @@ def _time_series_plan(dt_col: str, grain: str, metric: str | None, normalized: s
         "time_column": time_col if not derived else None,
         **({"time_column": dt_col} if not derived else {"time_column": "quarter"}),
         "grain": grain,
-        "metrics": [{"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
+        # Cờ 0/1: mean = tỷ lệ hoàn, sum chỉ là số đơn hoàn.
+        "metrics": [{"column": metric, "aggregation": "mean", "label": "Tỷ lệ hoàn"} if metric == "la_don_hoan"
+                    else {"column": metric, "aggregation": "sum", "label": f"Tổng {metric}"}],
         "sort": [{"column": grain, "direction": "asc"}],
         "limit": 24,
     }

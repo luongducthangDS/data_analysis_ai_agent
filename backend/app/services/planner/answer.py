@@ -129,11 +129,13 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
         dim = result.columns[0]
         metric = numeric_cols[0]
         is_rate = metric in rates  # tổng/tỷ trọng của các tỷ lệ là số vô nghĩa
+        # Tỷ trọng tháng/tổng in cạnh lãi ("34.002.675 (20,5%)") đọc như biên lãi.
+        share = not is_rate and plan.get("action") != "time_series"
         total = sum(float(r[metric]) for r in result.to_dict(orient="records") if r[metric] is not None)
         lines.append("### Xếp hạng / kết quả")
         for index, row in enumerate(result.to_dict(orient="records"), start=1):
             val = row[metric]
-            pct = f" ({fmt_pct(float(val) / total)})" if total and val is not None and not is_rate else ""
+            pct = f" ({fmt_pct(float(val) / total)})" if total and val is not None and share else ""
             lines.append(f"{index}. {row[dim]}: {_format_value(val, is_rate)}{pct}")
         if len(result) > 1 and not is_rate:
             lines.append(f"\nTổng: {_format_cell(total)}")
