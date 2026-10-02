@@ -6,8 +6,9 @@ eval_seller.py — đo đúng lời hứa của SellerLens trên shop MÔ PHỎN
   A = đủ file (2 export + giá vốn + quảng cáo), 103 câu   B = chỉ 2 export (không giá vốn), 36 câu
   C = export + bảng giá vốn thiếu 50/150 SKU, 28 câu
 Câu 1–25 là bộ gốc (giữ nguyên id để so với lần chạy cũ); câu mới chỉ thêm vào cuối.
-Bộ dev đã được dùng để sửa app → điểm trên nó lạc quan. Bộ HELD-OUT (`--heldout`, id 1001+, 30 câu) viết sau
-đợt sửa và commit trước lần chạy đầu: không sửa app theo nó.
+Bộ dev đã được dùng để sửa app → điểm trên nó lạc quan. Bộ HELD-OUT (`--heldout`, id 2001+, 40 câu) viết
+2026-10-02 và commit trước lần chạy đầu: không sửa app theo nó. Bộ held-out v1 (id 1001+) đã lộ, chỉ giữ để
+`--merge` chấm lại các lần chạy cũ.
 
 Chỉ số (docs/PM_FEEDBACK_2026-09-26.md §5):
   • north star  — % câu về lãi/phí/hoàn trả số khớp đáp án ±2%, hoặc từ chối/cảnh báo đúng khi thiếu dữ liệu (mục tiêu ≥ 90%)
@@ -333,11 +334,9 @@ def cases(t: dict) -> list[Case]:
     ]
 
 
-def heldout_cases(t: dict) -> list[Case]:
-    """Bộ HELD-OUT (id 1001+), viết 2026-10-01 SAU đợt sửa app theo bộ dev và commit TRƯỚC lần chạy đầu tiên.
-
-    Không sửa app dựa trên các câu này (sửa = bộ này thành dev, phải viết bộ mới). Chỉ được sửa đáp án khi chính
-    đáp án sai. Diễn đạt khác bộ dev: viết tắt, không dấu, kết hợp nhiều bộ lọc.
+def heldout_v1_cases(t: dict) -> list[Case]:
+    """Bộ held-out v1 (id 1001+), viết 2026-10-01. ĐÃ LỘ 2026-10-02: câu trả lời sai của nó đã được xem khi so
+    code cũ/mới → không còn là thước đo trung thực. Chỉ giữ để `--merge` chấm lại các lần chạy cũ; không chạy mới.
     """
     by, qc = t["by"], t["qc"]
     mo, cat, prov, car, sku = (by(c) for c in ("thang", "danh_muc", "tinh", "don_vi_van_chuyen", "sku"))
@@ -385,6 +384,86 @@ def heldout_cases(t: dict) -> list[Case]:
         Case(1028, "C", "Lãi Shopee tháng 4", "warn", [chm.pre_c[(sh, 4)]], True),
         Case(1029, "C", "lai tiktok quy 2", "warn", [chq.pre_c[(tt, 2)]], True),
         Case(1030, "C", "SKU LAN-140 lãi bao nhiêu", "warn", [sku.pre_c["LAN-140"]], True),  # SKU thiếu giá vốn
+    ]
+
+
+def heldout_cases(t: dict) -> list[Case]:
+    """Bộ HELD-OUT v2 (id 2001+), viết 2026-10-02, commit TRƯỚC lần chạy đầu tiên.
+
+    Không sửa app dựa trên các câu này (sửa = bộ này thành dev, phải viết bộ mới). Chỉ được sửa đáp án khi chính
+    đáp án sai. Người viết đã thấy lỗi của đường Luật (bỏ sót bộ lọc), nên cơ cấu được chốt TRƯỚC khi viết câu:
+      A 29 câu: lãi 10 · doanh thu & phí 9 · hoàn 5 · quảng cáo & số đơn 3 · ngoài dữ liệu 2
+      B 6 câu: 3 từ chối lãi, 3 câu không cần giá vốn · C 5 câu: 4 lãi kèm cảnh báo, 1 không cần giá vốn
+      Câu A (trừ ngoài phạm vi) có ≥ 1 bộ lọc ≈ 75% (dev 72%), ≥ 2 bộ lọc ≈ 21% (dev 7%: seller hay hỏi kiểu
+      "Shopee tháng 5", nhưng không dồn như v1).
+    Không câu nào trùng dev/v1 (test kiểm). Câu "nhóm nào…" chấm bằng số: tên ngắn như "Áo" khớp nhầm "quảng cáo".
+    """
+    by, qc = t["by"], t["qc"]
+    mo, q, ch, cat, prov, car, sku = (by(c) for c in ("thang", "quy", "kenh", "danh_muc", "tinh", "don_vi_van_chuyen", "sku"))
+    chm, chq, prm, cat_c, tot = by("kenh", "thang"), by("kenh", "quy"), by("tinh", "thang"), by("danh_muc_c"), mo.sum()
+    qc_m = qc.groupby("thang")["chi_phi_qc"].sum()
+    qc_chq = qc.assign(quy=qc["ngay"].dt.quarter).groupby(["kenh", "quy"])["chi_phi_qc"].sum()
+    sh, tt = "Shopee", "TikTok Shop"
+    margin = ch.net / ch.rev
+    names = {s[0]: s for s in t["s2"]}  # SKU lỗ: mã hay tên sản phẩm đều đúng
+    nodata = [["30/06/2026", "không có"]]
+
+    def lai(f: pd.DataFrame, k) -> list[float]:
+        return [f.pre[k], f.net[k]]
+
+    return [
+        # ── A: lãi ──
+        Case(2001, "A", "Lãi ròng tháng 4 của TikTok là bao nhiêu?", "number", [chm.net[(tt, 4)]], True),
+        Case(2002, "A", "Quý 2 Shopee lãi trước quảng cáo bao nhiêu?", "number", [chq.pre[(sh, 2)]], True),
+        Case(2003, "A", "Tháng nào lãi ròng cao nhất?", "contains", [month(mo.net.idxmax())], True),
+        Case(2004, "A", "3 tháng đầu năm shop lãi bao nhiêu", "number", lai(q, 1), True),
+        Case(2005, "A", "danh muc set do lai rong bao nhieu", "number", [cat.net["Set đồ"]], True),
+        Case(2006, "A", "Lãi ròng chiếm bao nhiêu % doanh thu thuần?", "contains", [pct(tot.net / tot.rev)], True),
+        Case(2007, "A", "Shopee còn lại bao nhiêu lãi ròng sau khi trừ quảng cáo?", "number", [ch.net[sh]], True),
+        Case(2008, "A", "Lãi ròng tháng 6 giảm bao nhiêu so với tháng 3?", "number", [mo.net[6] - mo.net[3]], True,
+             near=[mo.net[3], mo.net[6]]),
+        Case(2009, "A", "Kênh nào có biên lãi ròng cao hơn, bao nhiêu %?", "contains",
+             [margin.idxmax().split()[0], pct(margin.max())], True),
+        Case(2010, "A", "SKU nào lỗ nặng nhất sau khi trừ quảng cáo?", "contains",
+             [names.get(sku.net.idxmin(), [sku.net.idxmin()])], True),
+        # ── A: doanh thu, phí sàn ──
+        Case(2011, "A", "Doanh thu thuần của TikTok Shop quý 2", "number", [chq.rev[(tt, 2)]], True),
+        Case(2012, "A", "Danh mục nào doanh thu thuần cao nhất?", "number", [cat.rev.max()], True),
+        Case(2013, "A", "Tỷ lệ phí sàn cả 6 tháng là bao nhiêu %?", "contains", [pct(tot.fee / tot.rev)], True),
+        Case(2014, "A", "Tỷ lệ phí sàn quý 1", "contains", [pct(q.fee[1] / q.rev[1])], True),
+        Case(2015, "A", "Tháng 5 phí sàn Shopee chiếm bao nhiêu % doanh thu thuần?", "contains",
+             [pct(chm.fee[(sh, 5)] / chm.rev[(sh, 5)])], True),
+        Case(2016, "A", "Doanh thu thuần tháng 4 ở Cần Thơ", "number", [prm.rev[("Cần Thơ", 4)]], True),
+        Case(2017, "A", "How much net revenue did the shop make in total?", "number", [tot.rev], True),
+        Case(2018, "A", "Doanh thu thuần tháng 6 chênh bao nhiêu so với tháng 1?", "number", [mo.rev[6] - mo.rev[1]], True,
+             near=[mo.rev[1], mo.rev[6]]),
+        Case(2019, "A", "Top 3 tỉnh doanh thu thuần cao nhất", "contains", prov.rev.nlargest(3).index.tolist(), True),
+        # ── A: hoàn hàng ──
+        Case(2020, "A", "Tháng 6 tỷ lệ hoàn là bao nhiêu", "contains", [pct(mo.hoan[6])], True),
+        Case(2021, "A", "SPX Express bị hoàn bao nhiêu %?", "contains", [pct(car.hoan["SPX Express"])], True),
+        Case(2022, "A", "Danh mục nào bị hoàn nhiều nhất?", "contains", [cat.hoan.idxmax()], True),  # "Chân váy"
+        Case(2023, "A", "ty le hoan quy 2", "contains", [pct(q.hoan[2])], True),
+        Case(2024, "A", "Tháng 3 mất bao nhiêu tiền ship hoàn?", "number", [mo.ship_hoan[3]], True),
+        # ── A: quảng cáo, số đơn ──
+        Case(2025, "A", "Quảng cáo tháng 5 tốn bao nhiêu?", "number", [qc_m[5]]),
+        Case(2026, "A", "Chi phí ads TikTok quý 1", "number", [qc_chq[(tt, 1)]]),
+        Case(2027, "A", "Quý 2 có bao nhiêu đơn hoàn thành?", "number", [q.xong[2]]),
+        # ── A: ngoài dữ liệu ──
+        Case(2028, "A", "Lãi tháng 10 năm nay", "contains", nodata, True),
+        Case(2029, "A", "Giá xăng hôm nay bao nhiêu?", "no_numbers", []),
+        # ── B: không giá vốn ──
+        Case(2030, "B", "Quý 1 lợi nhuận ròng sau quảng cáo bao nhiêu?", "refuse", [], True),
+        Case(2031, "B", "Danh mục Áo lời bao nhiêu", "refuse", [], True),
+        Case(2032, "B", "Kênh nào đang lỗ?", "refuse", [], True),
+        Case(2033, "B", "Tỷ lệ hoàn của Shopee", "contains", [pct(ch.hoan[sh])], True),
+        Case(2034, "B", "Phí sàn quý 2", "number", [q.fee[2]], True),
+        Case(2035, "B", "Doanh thu thuần ở Đà Nẵng tháng 5", "number", [prm.rev[("Đà Nẵng", 5)]], True),
+        # ── C: thiếu giá vốn 50/150 SKU ──
+        Case(2036, "C", "TikTok tháng 2 lãi bao nhiêu", "warn", [chm.pre_c[(tt, 2)]], True),
+        Case(2037, "C", "Tổng lãi quý 1", "warn", [q.pre_c[1]], True),
+        Case(2038, "C", "Tỉnh Thanh Hoá lãi bao nhiêu?", "warn", [prov.pre_c["Thanh Hoá"]], True),
+        Case(2039, "C", "Danh mục Áo lãi bao nhiêu", "warn", [cat_c.pre_c["Áo"]], True),  # chỉ phần SKU có trong bảng
+        Case(2040, "C", "Phí sàn tháng 2", "number", [mo.fee[2]], True),
     ]
 
 
@@ -487,13 +566,13 @@ def main() -> int:
     ap.add_argument("--delay", type=float, default=0.0,
                     help="Giãn cách giữa các câu (giây). Gemini free tier 15 request/phút/model, mỗi câu ~2 lượt gọi")
     ap.add_argument("--merge", nargs="+", help="Gộp các file --out (file sau ghi đè câu trùng id), không gọi server")
-    ap.add_argument("--heldout", action="store_true", help="Chạy bộ held-out (id 1001+) thay cho bộ dev")
+    ap.add_argument("--heldout", action="store_true", help="Chạy bộ held-out v2 (id 2001+) thay cho bộ dev")
     args = ap.parse_args()
     if args.merge:  # vd chạy lại các câu rơi xuống fallback vì hết quota rồi gộp với lần chạy chính
         by_id = {r["id"]: r for f in args.merge for r in json.loads(Path(f).read_text(encoding="utf-8"))["rows"]}
         # Chấm lại câu trả lời đã lưu bằng đáp án/bộ chấm hiện tại: sửa bộ chấm không cần gọi lại LLM.
         t = ground_truth()
-        current = {c.id: c for c in cases(t) + heldout_cases(t)}
+        current = {c.id: c for c in cases(t) + heldout_v1_cases(t) + heldout_cases(t)}
         rows = []
         for k in sorted(by_id):
             ok, wrong = score(current[k], by_id[k]["answer"])
