@@ -124,7 +124,7 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
     if len(numeric_cols) > 1:
         # Nhiều chỉ số (vd doanh thu + lãi): xếp hạng theo cột đầu sẽ giấu mất cột lãi → in cả bảng.
         lines.append(_frame_to_markdown(result, rates=rates))
-        return "\n".join(lines)
+        return "\n".join(lines + _ratio_comparison(result, plan))
     if len(result.columns) >= 2 and numeric_cols:
         dim = result.columns[0]
         metric = numeric_cols[0]
@@ -143,6 +143,25 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
 
     lines.append(_frame_to_markdown(result, rates=rates))
     return "\n".join(lines)
+
+
+def _ratio_comparison(result: pd.DataFrame, plan: dict[str, Any]) -> list[str]:
+    """2 nhóm so một tỷ lệ ("sàn nào phí cao hơn"): nói thẳng bên nào cao hơn bao nhiêu điểm %.
+    34,52% và 34,50% làm tròn ra "34,5% | 34,5%" trông như bằng nhau."""
+    ratios = [r.get("label") for r in plan.get("ratios") or [] if isinstance(r, dict)]
+    dims = [d for d in plan.get("group_by") or [] if d in result.columns]
+    if len(result) != 2 or not ratios or not dims or ratios[0] not in result.columns:
+        return []
+    label = ratios[0]
+    hi, lo = result.sort_values(label, ascending=False).to_dict(orient="records")
+    if pd.isna(hi[label]) or pd.isna(lo[label]):
+        return []
+    top, other = (" / ".join(str(row[d]) for d in dims) for row in (hi, lo))
+    gap = (float(hi[label]) - float(lo[label])) * 100
+    if round(gap, 2) == 0:
+        return ["", f"{label} của {top} và {other} bằng nhau ({fmt_pct(float(hi[label]))})."]
+    near = "gần như bằng nhau, " if gap < 0.1 else ""
+    return ["", f"{label}: {near}{top} cao hơn {other} {fmt_num(gap, 2)} điểm %."]
 
 
 def _rate_columns(plan: dict[str, Any]) -> set[str]:

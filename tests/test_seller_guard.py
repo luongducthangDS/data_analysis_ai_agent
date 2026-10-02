@@ -344,12 +344,14 @@ def test_suggested_questions_are_right_without_llm(full, offline):
     seg = t["by"]("tinh", "don_vi_van_chuyen").sort_values("hoan", ascending=False)
     (tinh, dvvc), top = seg.index[0], seg.iloc[0]
     loss = set(sku.index[sku.pre < 0])
+    rate = (ch.fee / ch.rev).sort_values(ascending=False)  # 34,52% và 34,50%: làm tròn 1 số lẻ ra bằng nhau
     expect = {
         "Vì sao lãi tháng này giảm?": [fmt_num(mo.pre[5] - mo.pre[6])],
         "Lãi từng tháng thế nào?": [fmt_num(v) for v in mo.pre],
         "SKU nào doanh thu cao mà đang lỗ?": sorted(loss),
         "Lãi ròng sau quảng cáo theo tháng": [fmt_num(v) for v in mo.net],
-        "Tỷ lệ phí sàn Shopee và TikTok bên nào cao hơn?": [fmt_pct(r) for r in ch.fee / ch.rev],
+        "Tỷ lệ phí sàn Shopee và TikTok bên nào cao hơn?": [
+            fmt_pct(r) for r in rate] + [f"{rate.index[0]} cao hơn {rate.index[1]} {fmt_num((rate[0] - rate[1]) * 100, 2)} điểm %"],
         "Tỉnh và đơn vị vận chuyển nào có tỷ lệ hoàn cao nhất?": [f"{tinh} | {dvvc} | {fmt_pct(top.hoan)}"],
     }
     assert set(expect) == set(seller_questions(full.dataframe))
