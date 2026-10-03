@@ -390,16 +390,53 @@ def test_suggested_questions_are_right_without_llm(full, offline):
     assert "%" not in answers["Lãi từng tháng thế nào?"] + answers["Lãi ròng sau quảng cáo theo tháng"]
 
 
+def test_rule_path_applies_the_filters_the_question_names(full, offline):
+    """Đường luật từng trả số cả shop cho câu hỏi về một tỉnh/tháng (14/30 🚨 held-out): phải lọc đúng."""
+    df = full.dataframe
+    hn = df[df.tinh == "Hà Nội"].groupby("don_vi_van_chuyen").la_don_hoan.mean()
+    na = df[df.tinh == "Nghệ An"].groupby("sku").loi_nhuan_truoc_qc.sum()
+    may = df[df.ngay_dat.astype(str).str.startswith("2026-05")].groupby("kenh")[["phi_san", "doanh_thu_thuan"]].sum()
+    expect = {
+        "Tỷ lệ hoàn theo đơn vị vận chuyển ở Hà Nội": [fmt_pct(v) for v in hn],
+        "SKU nào đang lỗ ở Nghệ An": [fmt_num(v) for v in na[na < 0]],
+        "Tỷ lệ phí sàn từng kênh tháng 5": [fmt_pct(v) for v in may.phi_san / may.doanh_thu_thuan],
+        "Tỷ lệ hoàn bao nhiêu": [fmt_pct(df.la_don_hoan.mean())],
+    }
+    for question, parts in expect.items():
+        answer = _ask(full, question).answer
+        assert all(p in answer for p in parts), (question, answer)
+    assert set(re.findall(r"LAN-\d+", _ask(full, "SKU nào đang lỗ ở Nghệ An").answer)) == set(na.index[na < 0])
+
+
 @pytest.mark.parametrize("question", [
-    "Tỷ lệ hoàn theo đơn vị vận chuyển ở Hà Nội",  # nhắc 1 tỉnh mà không chia theo tỉnh
-    "SKU nào đang lỗ ở Nghệ An",
-    "Tỷ lệ phí sàn từng kênh tháng 5",
-    "Tỷ lệ hoàn bao nhiêu",                       # không có chiều để chia: để luật chung xử lý
+    "Biên lãi tháng 6 là bao nhiêu",       # chưa có luật cho biên → không đoán
+    "Lãi trung bình mỗi đơn ở Shopee",
+    "Doanh thu tuần này",
+    "Lãi suất ngân hàng hiện nay bao nhiêu?",  # "lãi" ở đây không phải lãi của shop
 ])
-def test_seller_rule_plan_skips_questions_it_cannot_filter(full, question):
-    from backend.app.services.planner.execute import _normalize
-    from backend.app.services.planner.fallback import _seller_plan
-    assert _seller_plan(full.dataframe, _normalize(question)) is None
+def test_rule_path_refuses_what_it_has_no_rule_for(full, offline, question):
+    assert build_fallback_plan(full.dataframe, question).get("_generic")
+    assert "[unclear]" in _ask(full, question).executed_queries
+
+
+def test_rule_path_brand_short_names_do_not_match_common_words():
+    from backend.app.services.planner.seller_fallback import plain, value_filters
+    df = pd.DataFrame({"kenh": ["Shopee", "TikTok Shop"], "don_vi_van_chuyen": ["Best Express", "Giao Hàng Nhanh"]})
+    found = {q: [f["value"] for f in value_filters(df, plain(q))[0]] for q in (
+        "Top sản phẩm best seller", "Bao nhiêu đơn giao hàng thành công", "Tỷ lệ hoàn của Best Express", "Lãi TikTok")}
+    assert found == {"Top sản phẩm best seller": [], "Bao nhiêu đơn giao hàng thành công": [],
+                     "Tỷ lệ hoàn của Best Express": ["Best Express"], "Lãi TikTok": ["TikTok Shop"]}
+
+
+def test_rule_path_unknown_category_is_not_answered_with_the_whole_shop(partial, offline):
+    # Mọi SKU Chân váy nằm ngoài bảng giá vốn thiếu → không có danh mục đó; từng ra lãi cả shop.
+    assert NO_CATEGORY in _ask(partial, "Danh mục Chân váy lãi bao nhiêu?").answer
+
+
+def test_profit_bridge_keeps_the_channel_filter(full):
+    plan = build_fallback_plan(full.dataframe, "Vì sao lãi Shopee tháng 5 giảm so với tháng 4")
+    assert plan["action"] == "profit_bridge"
+    assert {"column": "kenh", "operator": "eq", "value": "Shopee"} in plan["filters"]
 
 
 def test_having_must_reference_plan_metrics(full):

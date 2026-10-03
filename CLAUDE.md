@@ -52,13 +52,14 @@
 - "Vì sao lãi đổi" = action `profit_bridge` (`ecommerce_semantic.profit_bridge`): 4 hạng mục cộng lại PHẢI bằng Δ lãi
   (giá vốn lấy phần dư). Gợi ý hành động sinh tất định ở `bridge_actions`, LLM không tự nghĩ; test bám đáp án S1/S4.
 - Câu gợi ý (`seller_questions`) phải đúng cả khi KHÔNG có LLM: sửa/thêm câu → cập nhật `test_suggested_questions_are_right_without_llm`.
-  Quy tắc metric mới viết vào prompt LLM thì thêm luôn vào `_seller_plan` (`planner/fallback.py`), không thì đường Luật làm sai.
+  Quy tắc metric mới viết vào prompt LLM thì thêm luôn vào `seller_plan` (`planner/seller_fallback.py`), không thì đường Luật làm sai.
+  Đường Luật chỉ trả lời khi hiểu HẾT câu (metric, mọi giá trị lọc, chiều chia); còn lại từ chối (`_refuse`), không đoán.
 - Thêm action mới cho planner: sửa CẢ `ALLOWED_ACTIONS` (`services/planner/execute.py`) lẫn `_ALLOWED_ACTIONS` + `_ACTION_ALIASES` (`agents/nodes/plan.py`).
 - Mọi merge trên dữ liệu người dùng phải gọi `check_join_size` (`services/storage.py`) trước; lỗi guard (`JoinTooLarge`) không được bị `except Exception` nuốt.
 - So khớp từ khoá trên câu hỏi đã bỏ dấu phải khớp NGUYÊN TỪ (`\b`): chuỗi con "ai " từng khớp nhầm "lãi"/"loại"/"cái".
 - Chạy test: `.venv/Scripts/python.exe -m pytest -q` (python hệ thống thiếu pytest-mock → 5 lỗi giả ở test_api).
 - eval_100 cần server đang chạy: `tests/eval_100.py --base-url http://localhost:PORT --ids ...`; baseline ở `docs/eval-baseline/`.
-- Lời hứa seller đo bằng `tests/eval_seller.py --base-url ...` (167 câu, 3 cách nạp A đủ / B không giá vốn / C thiếu 1/3);
+- Lời hứa seller đo bằng `tests/eval_seller.py --base-url ...` (đường Luật: `--offline`, không cần server; 167 câu, 3 cách nạp A đủ / B không giá vốn / C thiếu 1/3);
   thêm câu = thêm vào CUỐI (giữ id), câu "X nào lãi nhất" phải nhận cả người đứng đầu theo lãi trước lẫn sau QC,
   và `test_eval_seller_cases_pass_with_their_own_answer` phải qua (bắt số rơi vào vùng năm 1900–2100, NaN);
   Gemini free tier: chạy với `--delay 8`, câu `source=fallback` do quota thì chạy lại rồi `--merge` (merge chấm lại từ câu đã lưu);
