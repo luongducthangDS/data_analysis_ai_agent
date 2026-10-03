@@ -140,11 +140,8 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
             lines.append(f"{index}. {row[dim]}: {_format_value(val, is_rate)}{pct}")
         if len(result) > 1 and not is_rate:
             lines.append(f"\nTổng: {_format_cell(total)}")
-            # "Trung bình mỗi tháng" = tổng / số kỳ. Chỉ bảng các kỳ thì chưa trả lời (từng "đạt" nhờ 1 tháng ≈ trung bình).
-            if plan.get("action") == "time_series" and re.search(r"\b(?:trung binh|binh quan)\b", _normalize(question)):
-                unit = {"month": "tháng", "quarter": "quý"}.get(plan.get("grain"), "kỳ")
-                n = int(result[metric].notna().sum())
-                lines.append(f"Trung bình mỗi {unit}: {fmt_num(total / n)} ({n} {unit})")
+            if avg := period_average(question, result, plan):
+                lines.append(avg[0])
         return "\n".join(lines)
 
     lines.append(_frame_to_markdown(result, rates=rates))
@@ -168,6 +165,25 @@ def _ratio_comparison(result: pd.DataFrame, plan: dict[str, Any]) -> list[str]:
         return ["", f"{label} của {top} và {other} bằng nhau ({fmt_pct(float(hi[label]))})."]
     near = "gần như bằng nhau, " if gap < 0.1 else ""
     return ["", f"{label}: {near}{top} cao hơn {other} {fmt_num(gap, 2)} điểm %."]
+
+
+def period_average(question: str, result: pd.DataFrame, plan: dict[str, Any]) -> tuple[str, float] | None:
+    """("Trung bình mỗi tháng: X (N tháng)", X) cho câu hỏi trung bình trên chuỗi thời gian một chỉ số.
+
+    Chỉ bảng các kỳ thì chưa trả lời: LLM bị cấm tự tính số mới, câu tất định từng chỉ in bảng. Tính ở đây để
+    câu tất định in ra và synthesize đưa vào prompt + tập số được phép."""
+    if plan.get("action") != "time_series" or not re.search(r"\b(?:trung binh|binh quan)\b", _normalize(question)):
+        return None
+    numeric = result.select_dtypes(include="number").columns.tolist()
+    if len(numeric) != 1 or numeric[0] in _rate_columns(plan):  # trung bình các tỷ lệ là số vô nghĩa
+        return None
+    values = result[numeric[0]].dropna()
+    # ponytail: đủ `limit` dòng thì có thể đã bị cắt → không tính (trung bình 12 tháng đầu ≠ trung bình cả kỳ).
+    if len(values) < 2 or len(result) >= int(plan.get("limit") or 10**6):
+        return None
+    unit = {"month": "tháng", "quarter": "quý"}.get(plan.get("grain"), "kỳ")
+    value = float(values.sum()) / len(values)
+    return f"Trung bình mỗi {unit}: {fmt_num(value)} ({len(values)} {unit})", value
 
 
 def _percent_ratios(plan: dict[str, Any]) -> list[str]:

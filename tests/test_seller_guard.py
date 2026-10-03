@@ -446,6 +446,32 @@ def test_rule_path_averages(full, offline):
         assert part in answer and "%" not in answer, (question, answer)
 
 
+@pytest.mark.parametrize("rounded", [False, True])
+def test_llm_may_state_the_monthly_average(full, monkeypatch, rounded):
+    """Prompt cấm LLM tự tính trung bình, bảng chỉ có từng tháng → LLM từng nói "dao động 48,8–64,9 tr" (production
+    03/10). Backend đưa số đã tính vào prompt và tập số được phép."""
+    from backend.app.agents.nodes.synthesize import synthesize_node
+    from backend.app.services.storage import session_store
+    question = "Trung bình mỗi tháng lãi bao nhiêu?"
+    session_store._sessions[full.session_id] = full
+    plan = {"action": "time_series", "time_column": "ngay_dat", "grain": "month", "limit": 12,  # plan LLM production
+            "metrics": [{"column": "loi_nhuan_truoc_qc", "aggregation": "sum", "label": "Tổng lãi"}]}
+    avg = fmt_num(full.dataframe.loi_nhuan_truoc_qc.sum() / 6)
+    said = "khoảng 58 triệu" if rounded else f"{avg} đ"
+    prompts = []
+
+    class Fake:
+        def generate(self, prompt, **_):
+            prompts.append(prompt)
+            return f"Trung bình mỗi tháng shop lãi {said} trước quảng cáo, tháng 3 cao nhất."
+
+    monkeypatch.setattr("backend.app.services.llm_service.get_llm_client", lambda: Fake())
+    out = synthesize_node({"question": question, "session_id": full.session_id, "plan": plan,
+                           "result_df": execute_plan(full.dataframe, plan), "executed_queries": []})
+    assert avg in prompts[0]
+    assert not out["llm_synthesis_failed"] and said in out["answer"]
+
+
 def test_rule_path_brand_short_names_do_not_match_common_words():
     from backend.app.services.planner.seller_fallback import plain, value_filters
     df = pd.DataFrame({"kenh": ["Shopee", "TikTok Shop"], "don_vi_van_chuyen": ["Best Express", "Giao Hàng Nhanh"]})

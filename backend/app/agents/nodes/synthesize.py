@@ -208,7 +208,9 @@ def synthesize_node(state: AgentState) -> AgentState:
     from backend.app.services.llm_service import get_llm_client
     from backend.app.services.storage import session_store
     from backend.app.services.planner.execute import _describe_numeric
-    from backend.app.services.planner.answer import _deterministic_answer, _build_charts_from_result, _build_currency_warning
+    from backend.app.services.planner.answer import (
+        _build_charts_from_result, _build_currency_warning, _deterministic_answer, period_average,
+    )
     from backend.app.services.ecommerce_semantic import answer_notes, seller_questions
 
     question = state["question"]
@@ -267,6 +269,10 @@ def synthesize_node(state: AgentState) -> AgentState:
                 f"độ lệch chuẩn={stats['std']}, Q1={stats['q1']}, Q3={stats['q3']}.\n"
             )
             dist_allowed = [float(v) for v in stats.values() if isinstance(v, (int, float))]
+    # "Trung bình mỗi tháng": prompt cấm LLM tự tính trung bình → đưa số backend đã tính và cho phép trích nó.
+    if avg := period_average(question, result_df, plan):
+        dist_context += f"\nĐÃ TÍNH SẴN (trả lời bằng số này): {avg[0]}\n"
+        dist_allowed.append(avg[1])
 
     # Try LLM synthesis
     try:
