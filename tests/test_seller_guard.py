@@ -360,6 +360,16 @@ def test_eval_single_period_question_rejects_a_table_of_every_period():
     assert score(case, f"Lãi tháng 5 là {may} đ, thấp hơn tháng 4.") == (True, False)
 
 
+def test_eval_average_question_rejects_a_table_of_every_period():
+    # #46 từng "đạt" vì lãi tháng 2 (57.993.780) cách trung bình (57.992.027) chưa tới 2%.
+    from tests.eval_seller import cases, ground_truth, score
+    case = {c.id: c for c in cases(ground_truth())}[46]  # "Trung bình mỗi tháng lãi bao nhiêu?"
+    table = "Câu hỏi: Trung bình mỗi tháng lãi bao nhiêu?\n1. 2026-01: 64.338.675\n2. 2026-02: 57.993.780"
+    assert score(case, table) == (False, False)
+    assert score(case, table + "\nTrung bình mỗi tháng: 57.992.028 (6 tháng)") == (True, False)
+    assert score(case, "Trung bình mỗi tháng lãi khoảng 57,99 triệu.")[0] is True
+
+
 def test_suggested_questions_are_right_without_llm(full, offline):
     """Câu gợi ý trong app phải đúng cả khi LLM không gọi được (hết quota → plan luật + câu tất định).
 

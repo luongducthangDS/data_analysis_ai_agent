@@ -533,11 +533,24 @@ def _dumps_periods(question: str, answer: str) -> bool:
     return bool(table) or len(text) >= 2
 
 
+def _average_only_in_table(case: Case, answer: str) -> bool:
+    """Hỏi trung bình mà số khớp chỉ nằm trong bảng các kỳ: lãi T2 57.993.780 ≈ trung bình 57.992.027 từng cho
+    đường luật "đạt" #46 dù không tính trung bình. Số đúng phải nằm trên dòng nói "trung bình"."""
+    if case.kind != "number" or not re.search(r"\b(?:trung binh|binh quan)\b", _plain(case.question)):
+        return False
+    low = answer.lower()
+    if len(set(_TABLE_PERIOD.findall(low)) | set(_TEXT_PERIOD.findall(low))) < 2:
+        return False
+    lines = [ln for ln in low.splitlines() if re.search(r"trung bình|bình quân", ln) and not ln.startswith("câu hỏi")]
+    return not any(abs(n - abs(e)) <= TOL * abs(e) for ln in lines for n in numbers(ln) for e in case.expect)
+
+
 def score(case: Case, answer: str) -> tuple[bool, bool]:
-    """(đạt, số_sai_trông_như_đúng). Bảng mọi kỳ cho câu hỏi một kỳ chỉ hạ "đạt" xuống "trượt";
-    bảng mang số sai vẫn là 🚨 (hạ trước khi chấm từng giấu 8 câu 🚨 của đường luật)."""
+    """(đạt, số_sai_trông_như_đúng). Bảng mọi kỳ cho câu hỏi một kỳ (hay câu hỏi trung bình) chỉ hạ "đạt" xuống
+    "trượt"; bảng mang số sai vẫn là 🚨 (hạ trước khi chấm từng giấu 8 câu 🚨 của đường luật)."""
     ok, wrong = _score(case, answer)
-    if ok and case.kind in ("number", "contains", "warn") and _dumps_periods(case.question, answer):
+    if ok and case.kind in ("number", "contains", "warn") and (
+            _dumps_periods(case.question, answer) or _average_only_in_table(case, answer)):
         return False, False
     return ok, wrong
 
