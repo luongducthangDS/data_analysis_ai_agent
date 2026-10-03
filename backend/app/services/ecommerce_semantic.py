@@ -22,13 +22,14 @@ METRICS: dict[str, str] = {
     "doanh_thu_thuan": "doanh thu đơn hoàn thành sau voucher shop (doanh_thu − giam_gia_shop); đơn huỷ/hoàn = 0",
     "phi_san": "tổng phí sàn của đơn: hoa hồng + thanh toán + voucher/freeship + dịch vụ + thuế khấu trừ",
     "la_don_hoan": "1 = đơn bị hoàn/trả, 0 = hoàn thành, trống = huỷ. mean(la_don_hoan) = TỶ LỆ HOÀN của nhóm",
+    "don_hoan_thanh": "1 = đơn hoàn thành, 0 = huỷ/hoàn. sum = SỐ ĐƠN HOÀN THÀNH, mẫu số của \"trung bình mỗi đơn\"",
     "loi_nhuan_truoc_qc": "lãi thật của đơn, CHƯA trừ quảng cáo: doanh_thu_thuan − phi_san − gia_von − chi_phi_hoan; "
                           "đơn hoàn thường âm. CHỈ có khi đã tải bảng giá vốn",
     "chi_phi_qc": "chi phí quảng cáo phân bổ về từng đơn theo doanh thu thuần trong cùng ngày × kênh. "
                   "CHỈ có khi đã tải file quảng cáo (ngay, kenh, chi_phi_qc)",
     "loi_nhuan_rong": "lãi SAU quảng cáo = loi_nhuan_truoc_qc − chi_phi_qc",
 }
-_BASE_METRICS = ("doanh_thu_thuan", "phi_san", "la_don_hoan", "loi_nhuan_truoc_qc")
+_BASE_METRICS = ("doanh_thu_thuan", "phi_san", "la_don_hoan", "don_hoan_thanh", "loi_nhuan_truoc_qc")
 NO_CATEGORY = "(chưa có danh mục)"
 PROFIT_COLS = ("loi_nhuan_truoc_qc", "loi_nhuan_rong")
 
@@ -177,6 +178,7 @@ def add_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["doanh_thu_thuan"] = (num("doanh_thu") - num("giam_gia_shop")).where(done, 0)
     out["phi_san"] = sum(num(c) for c in FEE_COLS).where(done, 0)
     out["la_don_hoan"] = returned.astype(float).where(~cancelled)
+    out["don_hoan_thanh"] = done.astype(int)
     if "gia_von" in out.columns:
         return_cost = num("chi_phi_hoan") if "chi_phi_hoan" in out.columns else 0
         out["loi_nhuan_truoc_qc"] = (out["doanh_thu_thuan"] - out["phi_san"]
@@ -358,6 +360,8 @@ def describe_metrics(df: pd.DataFrame) -> str:
         '  [{"label":"Tỷ lệ phí sàn","numerator":"<label metric phí>","denominator":"<label metric doanh_thu_thuan>"}].',
         "  Mẫu số tỷ lệ là doanh_thu_thuan, KHÔNG phải doanh_thu (doanh_thu gồm cả đơn huỷ/hoàn, phí và lãi thì không).",
         "  So sàn nào \"ăn phí nhiều hơn\" → so TỶ LỆ phí theo kenh, không so tổng tiền phí.",
+        "  Trung bình MỖI ĐƠN (giá trị đơn, phí/đơn, lãi/đơn) = sum metric / sum don_hoan_thanh, ratio thêm",
+        '  "percent": false (là số tiền, không phải %). Trung bình MỖI THÁNG = time_series grain "month", sum metric.',
         "  Tỷ lệ hoàn theo nhóm → mean la_don_hoan, kèm count ma_don để thấy cỡ nhóm; sort theo tỷ lệ.",
         "  Quảng cáo có gì bất thường / tăng vọt → time_series grain \"date\", sum chi_phi_qc (và doanh_thu_thuan),",
         "  filter kenh + khoảng ngày rộng hơn kỳ hỏi (vd thêm 4 tuần trước đó) để so với mức bình thường.",

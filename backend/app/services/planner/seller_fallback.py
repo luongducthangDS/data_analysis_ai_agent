@@ -18,13 +18,16 @@ LABELS = {
     "loi_nhuan_truoc_qc": "Lãi trước QC", "loi_nhuan_rong": "Lãi ròng", "doanh_thu_thuan": "Doanh thu thuần",
     "phi_san": "Phí sàn", "chi_phi_qc": "Chi phí quảng cáo", "chi_phi_hoan": "Chi phí hoàn hàng",
 }
-RATE, ORDERS, FEE_RATE = "Tỷ lệ hoàn", "Số đơn", "Tỷ lệ phí sàn"
+RATE, ORDERS, FEE_RATE, DONE = "Tỷ lệ hoàn", "Số đơn", "Tỷ lệ phí sàn", "Số đơn hoàn thành"
 NO_METRIC = "không nhận ra chỉ số"
 
 # Câu cần phép tính chưa có luật → từ chối, không đoán.
 _UNSUPPORTED = re.compile(
-    r"\b(?:vi sao|tai sao|nguyen nhan|bat thuong|so voi|chenh|tang|giam|bien|ty suat|trung binh|moi don|du bao"
+    r"\b(?:vi sao|tai sao|nguyen nhan|bat thuong|so voi|chenh|tang|giam|bien|ty suat|du bao"
     r"|neu|gia su|tuan|hom nay|hom qua|ngay nao|theo ngay|tung ngay|moi ngay|lai suat)\b")
+_AVERAGE = re.compile(r"\b(?:trung binh|binh quan)\b")
+# Trung bình mỗi đơn = tổng / số đơn hoàn thành (doanh thu, phí, lãi của đơn huỷ/hoàn đã là 0 hoặc chi phí hoàn).
+_PER_ORDER = re.compile(r"\b(?:moi|mot|1|tren) don\b|\bgia tri (?:trung binh )?(?:moi |cua )?don\b|\baov\b")
 # Thứ tự quan trọng: cụm cụ thể trước ("lãi trước quảng cáo" là lãi, không phải chi phí quảng cáo;
 # "phí ship hoàn" không phải phí sàn).
 _METRIC_HINTS: tuple[tuple[str, str], ...] = (
@@ -35,7 +38,8 @@ _METRIC_HINTS: tuple[tuple[str, str], ...] = (
     (r"quang cao|\bqc\b|\bads?\b", "chi_phi_qc"),
     (r"\bphi\b|platform fee", "phi_san"),
     (r"ty le hoan|hoan hang|tra hang|bi hoan|\bhoan\b(?! thanh)|return", "la_don_hoan"),
-    (r"doanh thu|\bdt\b|revenue|ban chay|ban duoc", "doanh_thu_thuan"),
+    (r"doanh thu|\bdt\b|revenue|ban chay|ban duoc|\bgia tri (?:trung binh )?(?:moi |cua )?don\b|\baov\b",
+     "doanh_thu_thuan"),
     (r"\b(?:lai|loi|loi nhuan|lo)\b|profit", "loi_nhuan_truoc_qc"),
 )
 _ORDERS = re.compile(r"\b(?:bao nhieu|may|tong so|so luong|so) don\b(?! vi)|\bdon hang\b")
@@ -147,7 +151,7 @@ def _period_filter(df: pd.DataFrame, q: str) -> tuple[dict | None, str | None]:
 
 
 def _metric(df: pd.DataFrame, q: str) -> str | None:
-    if _ORDERS.search(q) and "ma_don" in df.columns:
+    if _ORDERS.search(q) and "ma_don" in df.columns and not _PER_ORDER.search(q):  # "giá trị mỗi đơn hàng" ≠ số đơn
         return ORDERS
     for pattern, col in _METRIC_HINTS:
         if re.search(pattern, q):
@@ -213,6 +217,15 @@ def seller_plan(df: pd.DataFrame, question: str) -> dict[str, Any] | None:
     for col, words in _DIM_WORDS.items():  # hỏi theo một chiều mà bảng không có (vd danh mục khi chưa có bảng SP)
         if col not in df.columns and re.search(rf"\b(?:theo|tung|cac) (?:{words})\b|\b(?:{words}) nao\b", q):
             return _refuse(f"chưa có cột {col}")
+    per_order = bool(_PER_ORDER.search(q))
+    average = per_order or bool(_AVERAGE.search(q))
+    if per_order and (metric not in LABELS or "don_hoan_thanh" not in df.columns or fee_rate or loss or grain):
+        return _refuse("trung bình mỗi đơn chưa có luật cho câu này")
+    if average and not per_order:  # trung bình mỗi tháng/quý = tổng / số kỳ (answer in dòng "Trung bình mỗi tháng")
+        if not grain and (m := re.search(r"\btrung binh (thang|quy)\b(?! \d)", q)):
+            grain = {"thang": "month", "quy": "quarter"}[m.group(1)]
+        if not grain or dims or metric == "la_don_hoan" or fee_rate:
+            return _refuse("trung bình chưa rõ theo kỳ nào")
 
     if metric == "la_don_hoan":
         metrics = [{"column": "la_don_hoan", "aggregation": "mean", "label": RATE}]
@@ -225,12 +238,18 @@ def seller_plan(df: pd.DataFrame, question: str) -> dict[str, Any] | None:
         metrics = [{"column": "phi_san", "aggregation": "sum", "label": LABELS["phi_san"]},
                    {"column": "doanh_thu_thuan", "aggregation": "sum", "label": LABELS["doanh_thu_thuan"]}]
         key = FEE_RATE
+    elif per_order:
+        metrics = [{"column": metric, "aggregation": "sum", "label": LABELS[metric]},
+                   {"column": "don_hoan_thanh", "aggregation": "sum", "label": DONE}]
+        key = f"{LABELS[metric]} mỗi đơn"
     else:
         metrics, key = [{"column": metric, "aggregation": "sum", "label": LABELS[metric]}], LABELS[metric]
 
     plan: dict[str, Any] = {"metrics": metrics, "filters": filters}
     if fee_rate:
         plan["ratios"] = [{"label": FEE_RATE, "numerator": LABELS["phi_san"], "denominator": LABELS["doanh_thu_thuan"]}]
+    if per_order:
+        plan["ratios"] = [{"label": key, "numerator": LABELS[metric], "denominator": DONE, "percent": False}]
     asc = bool(_ASCENDING.search(q))
     if loss and dims:  # "SKU nào đang lỗ" = nhóm có TỔNG lãi < 0 (filter từng đơn sẽ bỏ mất đơn lãi)
         plan["metrics"] = [{"column": "doanh_thu_thuan", "aggregation": "sum", "label": LABELS["doanh_thu_thuan"]},
@@ -246,7 +265,7 @@ def seller_plan(df: pd.DataFrame, question: str) -> dict[str, Any] | None:
         ranked = bool(_SUPERLATIVE.search(q)) and re.search(r"\b(?:thang|quy) nao\b", q)
         plan["sort"] = [{"column": key, "direction": "asc" if asc else "desc"}] if ranked else [
             {"column": grain, "direction": "asc"}]
-        plan["limit"] = 1 if ranked else 24
+        plan["limit"] = 1 if ranked else (500 if average else 24)  # trung bình phải đủ mọi kỳ
         return plan
     if grain:  # chia theo kỳ VÀ theo chiều khác: kỳ thành cột dẫn xuất
         plan["derived_columns"] = [{"name": grain, "operation": grain, "source": TIME_COL}]

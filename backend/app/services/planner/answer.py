@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -139,6 +140,11 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
             lines.append(f"{index}. {row[dim]}: {_format_value(val, is_rate)}{pct}")
         if len(result) > 1 and not is_rate:
             lines.append(f"\nTổng: {_format_cell(total)}")
+            # "Trung bình mỗi tháng" = tổng / số kỳ. Chỉ bảng các kỳ thì chưa trả lời (từng "đạt" nhờ 1 tháng ≈ trung bình).
+            if plan.get("action") == "time_series" and re.search(r"\b(?:trung binh|binh quan)\b", _normalize(question)):
+                unit = {"month": "tháng", "quarter": "quý"}.get(plan.get("grain"), "kỳ")
+                n = int(result[metric].notna().sum())
+                lines.append(f"Trung bình mỗi {unit}: {fmt_num(total / n)} ({n} {unit})")
         return "\n".join(lines)
 
     lines.append(_frame_to_markdown(result, rates=rates))
@@ -148,7 +154,7 @@ def _deterministic_answer(question: str, result: pd.DataFrame, plan: dict[str, A
 def _ratio_comparison(result: pd.DataFrame, plan: dict[str, Any]) -> list[str]:
     """2 nhóm so một tỷ lệ ("sàn nào phí cao hơn"): nói thẳng bên nào cao hơn bao nhiêu điểm %.
     34,52% và 34,50% làm tròn ra "34,5% | 34,5%" trông như bằng nhau."""
-    ratios = [r.get("label") for r in plan.get("ratios") or [] if isinstance(r, dict)]
+    ratios = _percent_ratios(plan)
     dims = [d for d in plan.get("group_by") or [] if d in result.columns]
     if len(result) != 2 or not ratios or not dims or ratios[0] not in result.columns:
         return []
@@ -164,9 +170,14 @@ def _ratio_comparison(result: pd.DataFrame, plan: dict[str, Any]) -> list[str]:
     return ["", f"{label}: {near}{top} cao hơn {other} {fmt_num(gap, 2)} điểm %."]
 
 
+def _percent_ratios(plan: dict[str, Any]) -> list[str]:
+    """Label các ratio là tỷ lệ; `"percent": false` là số tiền (doanh thu / số đơn)."""
+    return [r.get("label") for r in plan.get("ratios") or [] if isinstance(r, dict) and r.get("percent", True)]
+
+
 def _rate_columns(plan: dict[str, Any]) -> set[str]:
     """Cột kết quả là tỷ lệ 0–1: ratios của plan và mean(la_don_hoan). In dạng 33,5%, không phải 0,3350."""
-    cols = {r.get("label") for r in plan.get("ratios") or [] if isinstance(r, dict)}
+    cols = set(_percent_ratios(plan))
     cols |= {_metric_label(m) for m in plan.get("metrics") or []
              if isinstance(m, dict) and m.get("column") == "la_don_hoan" and m.get("aggregation") == "mean"}
     return cols

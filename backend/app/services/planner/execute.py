@@ -137,6 +137,8 @@ def _validate_plan_against_dataframe(df: pd.DataFrame, plan: dict[str, Any]) -> 
     for ratio in plan.get("ratios", []) or []:
         if not isinstance(ratio, dict) or not ratio.get("label"):
             raise PlanValidationError("ratio cần label, numerator, denominator.")
+        if not isinstance(ratio.get("percent", True), bool):
+            raise PlanValidationError(f"ratio.percent phải là true/false: {ratio.get('percent')!r}")
         for key in ("numerator", "denominator"):
             if ratio.get(key) not in labels:
                 raise PlanValidationError(f"ratio.{key} phải là label của một metric trong plan: {ratio.get(key)}")
@@ -298,7 +300,8 @@ def _execute_aggregate(df: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     for ratio in plan.get("ratios", []) or []:
         # Tỷ số của 2 TỔNG (vd phí sàn / doanh thu thuần), không phải trung bình tỷ lệ từng đơn.
         den = pd.to_numeric(result[ratio["denominator"]], errors="coerce")
-        result[ratio["label"]] = (pd.to_numeric(result[ratio["numerator"]], errors="coerce") / den.where(den != 0)).round(4)
+        result[ratio["label"]] = (pd.to_numeric(result[ratio["numerator"]], errors="coerce") / den.where(den != 0)).round(
+            4 if ratio.get("percent", True) else 2)  # tỷ lệ 0–1 cần 4 số lẻ; tiền mỗi đơn thì 2
     # Lọc SAU khi cộng ("SKU nào đang lỗ" = tổng lãi < 0): filter thường chạy trên từng đơn, bỏ mất đơn lãi.
     result = _apply_filters(result, plan.get("having") or [])
     return _sort_and_limit(result, plan)

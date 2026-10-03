@@ -420,13 +420,30 @@ def test_rule_path_applies_the_filters_the_question_names(full, offline):
 
 @pytest.mark.parametrize("question", [
     "Biên lãi tháng 6 là bao nhiêu",       # chưa có luật cho biên → không đoán
-    "Lãi trung bình mỗi đơn ở Shopee",
+    "Lãi trung bình",                       # trung bình theo gì?
+    "Tỷ lệ hoàn trung bình mỗi tháng",      # trung bình các tỷ lệ là số vô nghĩa
     "Doanh thu tuần này",
     "Lãi suất ngân hàng hiện nay bao nhiêu?",  # "lãi" ở đây không phải lãi của shop
 ])
 def test_rule_path_refuses_what_it_has_no_rule_for(full, offline, question):
     assert build_fallback_plan(full.dataframe, question).get("_generic")
     assert "[unclear]" in _ask(full, question).executed_queries
+
+
+def test_rule_path_averages(full, offline):
+    """Trung bình mỗi tháng = tổng / số tháng; mỗi đơn = tổng / số đơn hoàn thành (đơn huỷ/hoàn không tính)."""
+    df = full.dataframe
+    done = df.trang_thai == "Hoàn thành"
+    shopee = df.kenh == "Shopee"
+    expect = {
+        "Trung bình mỗi tháng lãi bao nhiêu?": f"Trung bình mỗi tháng: {fmt_num(df.loi_nhuan_truoc_qc.sum() / 6)}",
+        "Phí sàn trung bình mỗi đơn hoàn thành": fmt_num(df.phi_san.sum() / done.sum(), 2),
+        "Giá trị trung bình mỗi đơn hàng": fmt_num(df.doanh_thu_thuan.sum() / done.sum(), 2),
+        "Mỗi đơn lãi bao nhiêu ở Shopee?": fmt_num(df.loi_nhuan_truoc_qc[shopee].sum() / (done & shopee).sum(), 2),
+    }
+    for question, part in expect.items():
+        answer = _ask(full, question).answer
+        assert part in answer and "%" not in answer, (question, answer)
 
 
 def test_rule_path_brand_short_names_do_not_match_common_words():
