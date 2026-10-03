@@ -23,14 +23,17 @@ File export không có phần hàng hỏng khi hoàn, nên lãi đường export
 Usage:
     uvicorn backend.app.main:app --port 8000
     python tests/eval_seller.py --base-url http://localhost:8000 [--ids 1,4,14-16] [--out results/seller.json]
+    python tests/eval_seller.py --offline [--heldout]     # đường Luật (LLM tắt), trong process, ~1 phút
 """
 from __future__ import annotations
 
 import argparse
 import io
 import json
+import os
 import re
 import sys
+import tempfile
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -566,7 +569,7 @@ def _score(case: Case, answer: str) -> tuple[bool, bool]:
 
 # ── Chạy ────────────────────────────────────────────────────────────────────────
 
-def upload(base: str, mode: str) -> str:
+def _mode_files(mode: str) -> list[tuple[str, bytes]]:
     files = [(n, (SHOP / n).read_bytes()) for n in EXPORTS]
     if mode == "A":
         files += [(n, (SHOP / n).read_bytes()) for n in ("products.csv", "ads_daily.csv")]
@@ -574,6 +577,11 @@ def upload(base: str, mode: str) -> str:
         buf = io.BytesIO()
         pd.read_csv(SHOP / "products.csv").head(100).to_csv(buf, index=False)
         files.append(("gia_von.csv", buf.getvalue()))
+    return files
+
+
+def upload(base: str, mode: str) -> str:
+    files = _mode_files(mode)
     r = requests.post(f"{base}/api/upload", files=[("files", (n, b, "text/csv")) for n, b in files], timeout=120)
     r.raise_for_status()
     return r.json()["session_id"]
@@ -595,6 +603,36 @@ def ask(base: str, sid: str, question: str) -> tuple[str, dict, float]:
     return answer, done, time.time() - t0
 
 
+def offline() -> tuple:
+    """(upload, ask) chạy trong process với LLM tắt = đo đường Luật: không cần server, không tốn quota."""
+    tmp = tempfile.mkdtemp(prefix="eval_offline_")  # như conftest: không ghi phiên eval vào DB dev
+    os.environ.update(DATA_DIR=tmp, DATABASE_URL=f"sqlite:///{tmp}/eval.db")
+    from backend.app import database
+    assert tmp in database.DATABASE_URL, "backend.app.database đã nạp trước, hoặc .env có DATABASE_URL"
+    database.init_db()
+    from backend.app.agents.nodes import respond
+    from backend.app.agents.runner import run as agent_run
+    from backend.app.services import llm_service
+    from backend.app.services.storage import SessionStore, session_store
+
+    def off(*_):
+        raise RuntimeError("LLM tắt (--offline)")
+
+    llm_service.get_llm_client = respond.get_llm_client = off
+
+    def up(_base: str, mode: str) -> str:
+        session = SessionStore().create_multiple(_mode_files(mode))
+        session_store._sessions[session.session_id] = session
+        return session.session_id
+
+    def ask_(_base: str, sid: str, question: str) -> tuple[str, dict, float]:
+        t0 = time.time()
+        out = agent_run(sid, question, [])
+        return out.answer, {"source": out.source, "executed_queries": out.executed_queries}, time.time() - t0
+
+    return up, ask_
+
+
 def _ids(spec: str | None) -> set[int] | None:
     if not spec:
         return None
@@ -614,6 +652,7 @@ def main() -> int:
                     help="Giãn cách giữa các câu (giây). Gemini free tier 15 request/phút/model, mỗi câu ~2 lượt gọi")
     ap.add_argument("--merge", nargs="+", help="Gộp các file --out (file sau ghi đè câu trùng id), không gọi server")
     ap.add_argument("--heldout", action="store_true", help="Chạy bộ held-out v2 (id 2001+) thay cho bộ dev")
+    ap.add_argument("--offline", action="store_true", help="LLM tắt, chạy trong process: đo đường Luật")
     args = ap.parse_args()
     if args.merge:  # vd chạy lại các câu rơi xuống fallback vì hết quota rồi gộp với lần chạy chính
         by_id = {r["id"]: r for f in args.merge for r in json.loads(Path(f).read_text(encoding="utf-8"))["rows"]}
@@ -625,7 +664,8 @@ def main() -> int:
             ok, wrong = score(current[k], by_id[k]["answer"])
             rows.append({**by_id[k], **asdict(current[k]), "ok": ok, "wrong_looks_right": wrong})
     else:
-        rows = run(args.base_url.rstrip("/"), _ids(args.ids), args.delay, heldout_cases if args.heldout else cases)
+        rows = run(args.base_url.rstrip("/"), _ids(args.ids), args.delay, heldout_cases if args.heldout else cases,
+                   *(offline() if args.offline else ()))
     summary = summarize(rows)
     print("\n" + json.dumps(summary, ensure_ascii=False))
     if args.out:
@@ -635,7 +675,7 @@ def main() -> int:
     return 1 if summary["wrong_looks_right"] else 0
 
 
-def run(base: str, wanted: set[int] | None, delay: float, pool=cases) -> list[dict]:
+def run(base: str, wanted: set[int] | None, delay: float, pool=cases, upload=upload, ask=ask) -> list[dict]:
     todo = [c for c in pool(ground_truth()) if not wanted or c.id in wanted]
     sessions = {m: upload(base, m) for m in sorted({c.mode for c in todo})}
     rows = []
